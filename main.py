@@ -7,6 +7,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import PydanticBaseSettingsSource, YamlConfigSettingsSource
 from contextlib import asynccontextmanager
 from agent.base import Agent
 from agent.openai import OpenAIAgent
@@ -16,56 +17,62 @@ from models.requests import SpeakRequest, ChatRequest
 from models.responses import TranscribeResponse, ChatResponse
 from models.errors import InvalidModelRefError
 from utils import parse_model_ref
-from typing import Optional, Annotated
+from typing import Optional, Annotated, List, Dict, Tuple, Type
+from pydantic import BaseModel, Field
 import logging
+from enum import Enum
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+class ProviderKind(str, Enum):
+    openai = "openai"
+    google = "google"
+    elevenlabs = "elevenlabs"
+
+class ProviderConfig(BaseModel):
+    kind: str = Field(..., description="Provider SDK kind: openai | google | elevenlabs")
+    name: str = Field(..., description="The name of the provider")
+    api_key: Optional[str] = Field(None, description="API key value OR env var name if api_key_env is not set")
+    base_url: Optional[str] = Field(None, description="Optional base URL for the provider API")
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env")
+    model_config = SettingsConfigDict(yaml_file="config.yaml")
     master_api_key: str = Field(..., description="The master API key, used to authenticate requests")
     host: str = Field(default="0.0.0.0", description="The host to run the server on")
     port: int = Field(default=8000, description="The port to run the server on")
-    openai_api_key: Optional[str] = Field(None, description="The OpenAI API key")
-    google_api_key: Optional[str] = Field(None, description="The Google API key")
-    elevenlabs_api_key: Optional[str] = Field(None, description="The ElevenLabs API key")
-    elevenlabs_base_url: Optional[str] = Field(None, description="The ElevenLabs API base URL")
-    google_base_url: Optional[str] = Field(None, description="The Google API base URL")
-    openai_base_url: Optional[str] = Field(None, description="The OpenAI API base URL")
+    providers: List[ProviderConfig] = Field(..., description="The providers to use")
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: Type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> Tuple[PydanticBaseSettingsSource, ...]:
+        return (YamlConfigSettingsSource(settings_cls),)
 
 settings = Settings()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.master_api_key = settings.master_api_key
-    app.state.openai_agent = None
-    app.state.google_agent = None
-    app.state.elevenlabs_agent = None
-    # main agents
-    if settings.openai_api_key:
-        app.state.openai_agent = OpenAIAgent(settings.openai_api_key, settings.openai_base_url)
-    if settings.google_api_key:
-        app.state.google_agent = GeminiAgent(settings.google_api_key, settings.google_base_url)
-    if settings.elevenlabs_api_key:
-        app.state.elevenlabs_agent = ElevenLabsAgent(settings.elevenlabs_api_key, settings.elevenlabs_base_url)
-    # agent map
-    app.state.agents = {
-        "openai": app.state.openai_agent,
-        "google": app.state.google_agent,
-        "elevenlabs": app.state.elevenlabs_agent,
+    PROVIDER_KIND_TO_CLASS = {
+        ProviderKind.openai: OpenAIAgent,
+        ProviderKind.google: GeminiAgent,
+        ProviderKind.elevenlabs: ElevenLabsAgent,
     }
+    app.state.master_api_key = settings.master_api_key
+    app.state.agents: Dict[str, Agent] = {}
+    for provider in settings.providers:
+        agent_class = PROVIDER_KIND_TO_CLASS[provider.kind]
+        app.state.agents[provider.name] = agent_class(provider.api_key, provider.base_url)
     yield
-    if app.state.google_agent:
-        await app.state.google_agent.close()
-    if app.state.elevenlabs_agent:
-        await app.state.elevenlabs_agent.close()
-    if app.state.openai_agent:
-        await app.state.openai_agent.close()
-
-
+    for agent in app.state.agents.values():
+        await agent.close()
 
 
 app = FastAPI(lifespan=lifespan)
