@@ -16,7 +16,7 @@ from agent.elevenlabs import ElevenLabsAgent
 from models.requests import SpeakRequest, ChatRequest
 from models.responses import TranscribeResponse, ChatResponse
 from models.errors import InvalidModelRefError
-from utils import parse_model_ref
+from runner import Runner
 from typing import Optional, Annotated, List, Dict, Tuple, Type
 from pydantic import BaseModel, Field
 import logging
@@ -37,13 +37,20 @@ class ProviderConfig(BaseModel):
     api_key: Optional[str] = Field(None, description="API key value OR env var name if api_key_env is not set")
     base_url: Optional[str] = Field(None, description="Optional base URL for the provider API")
 
+
+class FallbackConfig(BaseModel):
+    transcribe_model: str = Field(..., description="The model to use for the fallback e.g. openai/whisper-1")
+    speak_model: str = Field(..., description="The model to use for the fallback e.g. openai/tts-1")
+    chat_model: str = Field(..., description="The model to use for the fallback e.g. openai/gpt-4o-mini")
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(yaml_file="config.yaml")
     master_api_key: str = Field(..., description="The master API key, used to authenticate requests")
     host: str = Field(default="0.0.0.0", description="The host to run the server on")
     port: int = Field(default=8000, description="The port to run the server on")
     providers: List[ProviderConfig] = Field(..., description="The providers to use")
-
+    fallback: Optional[FallbackConfig] = Field(None, description="The fallback to use")
+    
     @classmethod
     def settings_customise_sources(
         cls,
@@ -66,12 +73,25 @@ async def lifespan(app: FastAPI):
         ProviderKind.elevenlabs: ElevenLabsAgent,
     }
     app.state.master_api_key = settings.master_api_key
-    app.state.agents: Dict[str, Agent] = {}
+    
+    # Initialize agents
+    agents: Dict[str, Agent] = {}
     for provider in settings.providers:
         agent_class = PROVIDER_KIND_TO_CLASS[provider.kind]
-        app.state.agents[provider.name] = agent_class(provider.api_key, provider.base_url)
+        agents[provider.name] = agent_class(provider.api_key, provider.base_url)
+    
+    # Initialize runner with agents and fallback configuration
+    app.state.runner = Runner(
+        agents=agents,
+        transcribe_fallback=settings.fallback.transcribe_model if settings.fallback else None,
+        speak_fallback=settings.fallback.speak_model if settings.fallback else None,
+        chat_fallback=settings.fallback.chat_model if settings.fallback else None,
+    )
+    
     yield
-    for agent in app.state.agents.values():
+    
+    # Cleanup
+    for agent in app.state.runner.agents.values():
         await agent.close()
 
 
@@ -89,7 +109,7 @@ bearer_scheme = HTTPBearer()
 
 Credentials = Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)]
 MasterApiKey = Annotated[str, Depends(lambda: app.state.master_api_key)]
-Agents = Annotated[dict, Depends(lambda: app.state.agents)]
+RunnerDep = Annotated[Runner, Depends(lambda: app.state.runner)]
 
 
 
@@ -102,35 +122,35 @@ async def healthz():
 async def transcribe(
     credentials: Credentials,
     master_api_key: MasterApiKey,
-    agents: Agents,
+    runner: RunnerDep,
     file: UploadFile = File(..., description="The audio file to transcribe"),
     model: str = Form(..., description="The model to use for the request"),
     language: Optional[str] = Form(None, description="The language of the audio"),
-    ):
+) -> TranscribeResponse:
     if credentials.credentials != master_api_key:
         raise HTTPException(status_code=401, detail="Unauthorized")
+    
     try:
-        provider, model_name = await parse_model_ref(model)
-        agent: Agent = agents[provider]
-        
         # Read file and prepare tuple format
         file_content = await file.read()
         file_tuple = (file.filename, file_content, file.content_type)
         
-        text = await agent.transcribe(
-            model=model_name,
+        # Use runner which handles fallback automatically
+        text = await runner.transcribe(
+            model=model,
             file=file_tuple,
             language=language,
         )
         return TranscribeResponse(text=text)
-    except KeyError:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: '{provider}'")
-    except InvalidModelRefError:
-        raise HTTPException(status_code=400, detail=f"Invalid model reference: '{model}'")
-    except NotImplementedError:
-        raise HTTPException(status_code=400, detail=f"Agent '{provider}' does not support transcribe endpoint")
+    except InvalidModelRefError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except NotImplementedError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error transcribing audio: {str(e)}")
+        logger.exception(f"Error transcribing audio with model '{model}'")
+        raise HTTPException(status_code=500, detail=f"Error transcribing audio: {str(e)}")
 
 
 @app.post("/speak")
@@ -138,15 +158,15 @@ async def speak(
     payload: SpeakRequest,
     credentials: Credentials,
     master_api_key: MasterApiKey,
-    agents: Agents,
-    ):
+    runner: RunnerDep,
+) -> Response:
     if credentials.credentials != master_api_key:
         raise HTTPException(status_code=401, detail="Unauthorized")
+    
     try:
-        provider, model_name = await parse_model_ref(payload.model)
-        agent: Agent = agents[provider]
-        audio_bytes, mime_type = await agent.speak(
-            model=model_name,
+        # Use runner which handles fallback automatically
+        audio_bytes, mime_type = await runner.speak(
+            model=payload.model,
             text=payload.text,
             voice=payload.voice,
             response_format=payload.response_format,
@@ -161,14 +181,15 @@ async def speak(
                 "Cache-Control": "no-cache",
             },
         )
-    except KeyError:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: '{provider}'")
-    except InvalidModelRefError:
-        raise HTTPException(status_code=400, detail=f"Invalid model reference: '{payload.model}'")
-    except NotImplementedError:
-        raise HTTPException(status_code=400, detail=f"Agent '{provider}' does not support speak endpoint")
+    except InvalidModelRefError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except NotImplementedError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error speaking: {str(e)}")
+        logger.exception(f"Error generating speech with model '{payload.model}'")
+        raise HTTPException(status_code=500, detail=f"Error generating speech: {str(e)}")
 
 
 @app.post("/chat")
@@ -176,28 +197,29 @@ async def chat(
     payload: ChatRequest,
     credentials: Credentials,
     master_api_key: MasterApiKey,
-    agents: Agents,
-    ) -> ChatResponse:
+    runner: RunnerDep,
+) -> ChatResponse:
     if credentials.credentials != master_api_key:
         raise HTTPException(status_code=401, detail="Unauthorized")
+    
     try:
-        provider, model_name = await parse_model_ref(payload.model)
-        agent: Agent = agents[provider]
-        text = await agent.chat(
-            model=model_name,
+        # Use runner which handles fallback automatically
+        text = await runner.chat(
+            model=payload.model,
             messages=payload.messages,
             tools=payload.tools,
             tool_choice=payload.tool_choice,
         )
         return ChatResponse(text=text)
-    except KeyError:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: '{provider}'")
-    except InvalidModelRefError:
-        raise HTTPException(status_code=400, detail=f"Invalid model reference: '{payload.model}'")
-    except NotImplementedError:
-        raise HTTPException(status_code=400, detail=f"Agent '{provider}' does not support run endpoint")
+    except InvalidModelRefError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except NotImplementedError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error running: {str(e)}")
+        logger.exception(f"Error in chat with model '{payload.model}'")
+        raise HTTPException(status_code=500, detail=f"Error in chat: {str(e)}")
 
 
 

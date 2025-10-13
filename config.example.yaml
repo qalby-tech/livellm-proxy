@@ -21,3 +21,8 @@ providers:
     name: elevenlabs
     api_key: sk_...
     base_url: http://...:29999
+
+fallback:
+  transcribe_model: openai/whisper-1
+  speak_model: openai/tts-1
+  chat_model: google/gemini-2.5-flash
