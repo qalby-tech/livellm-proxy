@@ -7,11 +7,11 @@ replicaCount: 1
 
 # This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
 image:
-  repository: nginx
+  repository: kamasalyamov/livellm-proxy
   # This sets the pull policy for images.
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
-  tag: ""
+  tag: "dev-0.1.0"
 
 # This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
 imagePullSecrets: []
@@ -55,6 +55,8 @@ service:
   type: ClusterIP
   # This sets the ports more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#field-spec-ports
   port: 80
+  # The target port on the container
+  targetPort: 8000
 
 # This block is for setting up the ingress for more information can be found here: https://kubernetes.io/docs/concepts/services-networking/ingress/
 ingress:
@@ -73,27 +75,31 @@ ingress:
   #    hosts:
   #      - chart-example.local
 
-resources: {}
-  # We usually recommend not to specify default resources and to leave this as a conscious
-  # choice for the user. This also increases chances charts run on environments with little
-  # resources, such as Minikube. If you do want to specify resources, uncomment the following
-  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
-  # limits:
-  #   cpu: 100m
-  #   memory: 128Mi
-  # requests:
-  #   cpu: 100m
-  #   memory: 128Mi
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
 
 # This is to setup the liveness and readiness probes more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
 livenessProbe:
   httpGet:
-    path: /
+    path: /healthz
     port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
 readinessProbe:
   httpGet:
-    path: /
+    path: /healthz
     port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
 
 # This section is for setting up autoscaling more information can be found here: https://kubernetes.io/docs/concepts/workloads/autoscaling/
 autoscaling:
@@ -121,3 +127,47 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+# Configuration for the qalby-proxy application
+config:
+  # Master API key for authenticating requests to the proxy
+  masterApiKey: "sk-123"
+  # Host and port settings
+  host: "0.0.0.0"
+  port: 8000
+  
+  # Provider configurations
+  providers:
+    - kind: openai
+      name: openai
+      apiKey: ""  # Set via secret or override
+      baseUrl: "https://api.proxyapi.ru/openai/v1"
+    - kind: google
+      name: google
+      apiKey: ""  # Set via secret or override
+      baseUrl: "https://api.proxyapi.ru/google"
+    - kind: elevenlabs
+      name: elevenlabs
+      apiKey: ""  # Set via secret or override
+      baseUrl: "http://5.253.189.83:29999"
+  
+  # Fallback model configurations
+  fallback:
+    transcribeModel: "openai/whisper-1"
+    speakModel: "openai/tts-1"
+    chatModel: "google/gemini-2.5-flash"
+
+# Secrets for sensitive data (API keys)
+# You should create a secret manually or use external secret management
+# Example: kubectl create secret generic qalby-proxy-secrets \
+#   --from-literal=masterApiKey=your-master-key \
+#   --from-literal=openaiApiKey=your-openai-key \
+#   --from-literal=googleApiKey=your-google-key \
+#   --from-literal=elevenlabsApiKey=your-elevenlabs-key
+existingSecret: ""  # Name of existing secret to use
+secrets:
+  # If existingSecret is not provided, these values will be used to create a secret
+  masterApiKey: ""
+  openaiApiKey: ""
+  googleApiKey: ""
+  elevenlabsApiKey: ""
