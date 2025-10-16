@@ -135,7 +135,7 @@ class GeminiAgent(Agent):
         **kwargs):
 
         system: Optional[str] = None
-        if messages and messages[0].role == "system":
+        if messages and messages[0].role == MessageRole.system:
             system = messages[0].content
             messages = messages[1:]
 

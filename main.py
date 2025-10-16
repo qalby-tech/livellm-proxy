@@ -97,6 +97,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# Add observability middleware
+# app.add_middleware(ObservabilityMiddleware) # TODO: Add observability middleware
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
