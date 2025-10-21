@@ -2,13 +2,12 @@
 
 from pydantic import BaseModel, Field
 from typing import Optional, List, Union
-from models.agent.agent import AgentSettings
 from models.agent.chat import TextMessage, BinaryMessage
 from models.agent.tools import WebSearchInput, MCPStreamableServerInput
 
 
 class AgentRequest(BaseModel):
-    settings: AgentSettings
+    model: str = Field(..., description="The model to use")
     messages: List[Union[TextMessage, BinaryMessage]]
     tools: List[Union[WebSearchInput, MCPStreamableServerInput]]
     gen_config: Optional[dict] = Field(default=None, description="The configuration for the generation")

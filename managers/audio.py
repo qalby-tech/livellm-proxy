@@ -4,7 +4,7 @@ from audio_ai.openai import OpenAIAudioAIService
 from audio_ai.elevenlabs import ElevenLabsAudioAIService
 
 # pydantic models
-from models.audio.audio import AudioProviderKind
+from models.common import Settings, ProviderKind
 from models.audio.speak import SpeakRequest, SpeakResponse, SpeakStreamResponse
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse
 
@@ -14,14 +14,14 @@ class AudioManager:
     def __init__(self):
         self.services: Dict[str, Union[OpenAIAudioAIService, ElevenLabsAudioAIService]] = {}
     
-    def _get_service_cache_key(self, provider: AudioProviderKind, api_key: str, base_url: Optional[str] = None) -> str:
+    def _get_service_cache_key(self, provider: ProviderKind, api_key: str, base_url: Optional[str] = None) -> str:
         """Generate a unique cache key for a service configuration"""
         base = base_url or "default"
         return f"{provider.value}:{api_key}:{base}"
     
     def create_service(
         self, 
-        provider: AudioProviderKind, 
+        provider: ProviderKind, 
         api_key: str, 
         base_url: Optional[str] = None
     ) -> AudioAIService:
@@ -37,25 +37,29 @@ class AudioManager:
             return self.services[cache_key]
         
         # Create new service based on type
-        if provider == AudioProviderKind.OPENAI:
+        if provider == ProviderKind.OPENAI:
             new_service = OpenAIAudioAIService(api_key=api_key, base_url=base_url)
-        elif provider == AudioProviderKind.ELEVENLABS:
+        elif provider == ProviderKind.ELEVENLABS:
             new_service = ElevenLabsAudioAIService(api_key=api_key, base_url=base_url)
-        elif provider == AudioProviderKind.GOOGLE:
-            raise NotImplementedError("Google audio service is not implemented yet")
         else:
-            raise ValueError(f"Provider {provider} not supported")
+            raise ValueError(f"Provider {provider} not supported for audio services")
         
         # Cache and return the new service
         self.services[cache_key] = new_service
         return new_service
     
-    async def speak(self, request: SpeakRequest, stream: bool = False) -> Union[SpeakResponse, SpeakStreamResponse]:
+    async def speak(
+        self, 
+        settings: Settings,
+        payload: SpeakRequest, 
+        stream: bool = False
+    ) -> Union[SpeakResponse, SpeakStreamResponse]:
         """
         Convert text to speech using the specified provider.
         
         Args:
-            request: SpeakRequest containing settings, text, voice, and output format
+            settings: Provider settings (provider, API key, base URL)
+            payload: SpeakRequest containing model, text, voice, and output format
             stream: If True, returns SpeakStreamResponse. If False, returns SpeakResponse
             
         Returns:
@@ -64,33 +68,40 @@ class AudioManager:
         """
         # Create the service using the cached provider
         service = self.create_service(
-            provider=request.settings.provider,
-            api_key=request.settings.api_key,
-            base_url=request.settings.base_url
+            provider=settings.provider,
+            api_key=settings.api_key,
+            base_url=settings.base_url
         )
         
         # Call the speak method on the service
         if stream:
-            return await service.stream_speak(request)
+            return await service.stream_speak(payload)
         else:
-            return await service.speak(request)
+            return await service.speak(payload)
     
-    async def transcribe(self, request: TranscribeRequest) -> TranscribeResponse:
+    async def transcribe(
+        self, 
+        settings: Settings,
+        payload: TranscribeRequest,
+        stream: bool = False
+    ) -> TranscribeResponse:
         """
         Transcribe audio to text using the specified provider.
         
         Args:
-            request: TranscribeRequest containing settings, audio file, and language
+            settings: Provider settings (provider, API key, base URL)
+            payload: TranscribeRequest containing model, audio file, and language
+            stream: Not used for transcription (kept for consistency)
             
         Returns:
             TranscribeResponse containing transcribed text, detected language, and usage
         """
         # Create the service using the cached provider
         service = self.create_service(
-            provider=request.settings.provider,
-            api_key=request.settings.api_key,
-            base_url=request.settings.base_url
+            provider=settings.provider,
+            api_key=settings.api_key,
+            base_url=settings.base_url
         )
         
         # Call the transcribe method on the service
-        return await service.transcribe(request)
+        return await service.transcribe(payload)

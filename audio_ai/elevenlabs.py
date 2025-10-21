@@ -20,8 +20,12 @@ class ElevenLabsAudioAIService(AudioAIService):
         elevenlabs output format is like this: mp3_16000_16_stereo
         or ulaw_8000
         """
-        media_type, postfix = output_format.split('_')
-        sample_rate, _ = postfix.split("_")
+        media_type, postfix = output_format.split('_', maxsplit=1)
+        if "_" in postfix:
+            sample_rate, _ = postfix.split("_", maxsplit=1)
+        else:
+            sample_rate = postfix
+        sample_rate = int(sample_rate)
         mime_type = self.mime_type_map.get(media_type)
         if mime_type:
             return mime_type, int(sample_rate)
@@ -36,7 +40,7 @@ class ElevenLabsAudioAIService(AudioAIService):
         speech = await self.client.text_to_speech.convert(
             text=request.text,
             voice_id=request.voice,
-            model_id=request.settings.model,
+            model_id=request.model,
             output_format=request.output_format,
             **config
         )
@@ -50,17 +54,24 @@ class ElevenLabsAudioAIService(AudioAIService):
     async def stream_speak(self, request: SpeakRequest) -> SpeakStreamResponse:
         config = request.gen_config or {}
         mime_type, sample_rate = self.decode_output_format(request.output_format)
-        speech_stream = await self.client.text_to_speech.stream(
-            text=request.text,
-            voice_id=request.voice,
-            model_id=request.settings.model,
-            output_format=request.output_format,
-            **config
-        )
+        
         async def _elevenlabs_stream_speak_generator() -> AsyncIterator[bytes]:
-            async for chunk in speech_stream:
+            async for chunk in self.client.text_to_speech.stream(
+                text=request.text,
+                voice_id=request.voice,
+                model_id=request.model,
+                output_format=request.output_format,
+                **config
+            ):
                 yield chunk
-        return _elevenlabs_stream_speak_generator(), mime_type, sample_rate
+        
+        generator = _elevenlabs_stream_speak_generator()
+        first_chunk = await generator.__anext__()
+        async def _generator(first_chunk: bytes, generator: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+            yield first_chunk
+            async for chunk in generator:
+                yield chunk
+        return _generator(first_chunk, generator), mime_type, sample_rate
     
     @logfire.instrument(span_name="ElevenLabs Transcribe", record_return=True)
     async def transcribe(self, request: TranscribeRequest) -> TranscribeResponse:
@@ -68,7 +79,7 @@ class ElevenLabsAudioAIService(AudioAIService):
         transcription: SpeechToTextConvertResponse = await self.client.speech_to_text.convert(
             file=request.file,
             language_code=request.language,
-            model_id=request.settings.model,
+            model_id=request.model,
             **config
         )
         return TranscribeResponse(

@@ -2,6 +2,7 @@ from openai import AsyncOpenAI
 from openai import HttpxBinaryResponseContent
 from openai.types.audio import Transcription
 from audio_ai.base import AudioAIService
+from models.common import Settings
 from models.audio.speak import SpeakRequest, SpeakResponse, SpeakStreamResponse
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse
 from typing import Optional, Tuple, AsyncIterator
@@ -26,7 +27,7 @@ class OpenAIAudioAIService(AudioAIService):
         config = request.gen_config or {}
         mime_type, sample_rate = self.decode_output_format(request.output_format)
         speech: HttpxBinaryResponseContent = await self.client.audio.speech.create(
-            model=request.settings.model,
+            model=request.model,
             input=request.text,
             voice=request.voice,
             response_format=request.output_format,
@@ -39,23 +40,32 @@ class OpenAIAudioAIService(AudioAIService):
     async def stream_speak(self, request: SpeakRequest) -> SpeakStreamResponse:
         config = request.gen_config or {}
         mime_type, sample_rate = self.decode_output_format(request.output_format)
-        async with self.client.audio.speech.with_streaming_response.create(
-            model=request.settings.model,
-            input=request.text,
-            voice=request.voice,
-            response_format=request.output_format,
-            **config
-        ) as stream_response:
-            async def _openai_stream_speeeh_generator() -> AsyncIterator[bytes]:
-                async for chunk in stream_response:
+        
+        async def _openai_stream_speech_generator() -> AsyncIterator[bytes]:
+            async with self.client.audio.speech.with_streaming_response.create(
+                model=request.model,
+                input=request.text,
+                voice=request.voice,
+                response_format=request.output_format,
+                **config
+            ) as stream_response:
+                async for chunk in stream_response.iter_bytes():
                     yield chunk
-            return _openai_stream_speeeh_generator(), mime_type, sample_rate
+        
+        generator = _openai_stream_speech_generator()
+        first_chunk = await generator.__anext__()
+        async def _generator(first_chunk: bytes, generator: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+            yield first_chunk
+            async for chunk in generator:
+                yield chunk
+
+        return _generator(first_chunk, generator), mime_type, sample_rate
     
     @logfire.instrument(span_name="OpenAI Transcribe", record_return=True)
     async def transcribe(self, request: TranscribeRequest) -> TranscribeResponse:
         config = request.gen_config or {}
         transcription: Transcription = await self.client.audio.transcriptions.create(
-            model=request.settings.model,
+            model=request.model,
             file=request.file,
             language=request.language,
             **config

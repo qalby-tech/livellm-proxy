@@ -1,5 +1,6 @@
 from pydantic_ai import Agent
 from typing import Optional, List, Dict, Union, Tuple, AsyncIterator
+import logfire
 
 # tools
 from pydantic_ai import WebSearchTool
@@ -32,7 +33,7 @@ from pydantic_ai.models.groq import GroqModel
 from pydantic_ai.models.groq import GroqModelSettings
 
 # pydantic models
-from models.agent.agent import ProviderKind
+from models.common import Settings, ProviderKind
 from models.agent.tools import WebSearchInput, MCPStreamableServerInput, ToolKind, ToolInput
 from models.agent.chat import MessageRole, TextMessage, BinaryMessage
 from models.agent.run import AgentRequest, AgentResponse, AgentResponseUsage
@@ -212,48 +213,78 @@ class AgentManager:
                     )
                 )
     
+    async def _validated_stream_generator(
+        self,
+        model,
+        prompt: str,
+        history: List[Union[ModelMessage, ModelResponse]],
+        builtin_tools: List,
+        mcp_servers: List
+    ) -> AsyncIterator[AgentResponse]:
+        """
+        Validates first token generation before returning the stream.
+        This ensures errors are caught early before the StreamingResponse is created.
+        """
+        generator = self._run_stream_generator(
+            model=model,
+            prompt=prompt,
+            history=history,
+            builtin_tools=builtin_tools,
+            mcp_servers=mcp_servers
+        )
+        
+        # Get the first chunk to validate the stream works
+        first_chunk = await generator.__anext__()
+        
+        # If we got here, the stream is working, now yield everything
+        yield first_chunk.model_dump_json() + "\n"
+        async for chunk in generator:
+            yield chunk.model_dump_json() + "\n"
+    
     async def run(
         self,
-        agent_request: AgentRequest,
+        settings: Settings,
+        payload: AgentRequest,
         stream: bool = False
     ) -> Union[AsyncIterator[AgentResponse], AgentResponse]:
         """
         Run an agent in stateless mode with message history.
         
         Args:
-            agent_request: Agent configuration (provider, model, API key, messages, tools, etc.)
+            settings: Provider settings (provider, API key, base URL)
+            payload: Agent request payload (model, messages, tools, gen_config)
             stream: If True, returns an async generator for streaming responses
             
         Returns:
             If stream=False: AgentResponse with the complete output and usage
             If stream=True: AsyncIterator[AgentResponse] that yields chunks as they arrive
         """
-        if not agent_request.messages:
+        if not payload.messages:
             raise ValueError("Messages list cannot be empty")
         
         # Create the model using the cached provider
         model = self.create_model(
-            provider=agent_request.settings.provider,
-            model=agent_request.settings.model,
-            api_key=agent_request.settings.api_key,
-            base_url=agent_request.settings.base_url,
-            gen_config=agent_request.gen_config
+            provider=settings.provider,
+            model=payload.model,
+            api_key=settings.api_key,
+            base_url=settings.base_url,
+            gen_config=payload.gen_config
         )
         
         # Create the user prompt from the last message
-        prompt = agent_request.messages[-1]
+        prompt = payload.messages[-1]
         if prompt.role != MessageRole.USER:
             raise ValueError("Last message must be from user")
-        history = agent_request.messages[:-1]
+        history = payload.messages[:-1]
         history = self.convert_msgs(history)
         
         # Setup builtin tools
-        builtin_tools, mcp_servers = self.create_tools(agent_request.tools)
+        builtin_tools, mcp_servers = self.create_tools(payload.tools)
         
         # Run the agent with all parameters
         if stream:
-            # Return the generator directly - it manages its own context
-            return self._run_stream_generator(
+            # Return the validated generator that checks first token before streaming
+            return self._validated_stream_generator(
                 model=model,
                 prompt=prompt.content,
                 history=history,

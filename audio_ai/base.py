@@ -38,7 +38,3 @@ class AudioAIService(ABC):
         Transcribe audio to text
         """
         pass
-
-    @abstractmethod
-    async def stream_transcribe(self, request: TranscribeRequest) -> AsyncIterator[TranscribeResponse]:
-        pass
