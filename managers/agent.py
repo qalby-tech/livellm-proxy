@@ -3,9 +3,11 @@ from typing import Optional, List, Dict, Union, Tuple
 
 # tools
 from pydantic_ai import WebSearchTool
+from pydantic_ai.mcp import MCPServerStreamableHTTP
+
+# messages
 from pydantic_ai import BinaryContent, ModelMessage, ModelRequest, ModelResponse
 from pydantic_ai.messages import UserPromptPart, TextPart, SystemPromptPart
-from pydantic_ai.mcp import MCPServerStreamableHTTP
 
 # openai
 from openai import AsyncOpenAI
@@ -29,10 +31,10 @@ from pydantic_ai.models.groq import GroqModel
 from pydantic_ai.models.groq import GroqModelSettings
 
 # pydantic models
-from models.agent import AgentSettings, ProviderKind
-from models.tools import WebSearchInput, MCPStreamableServerInput, ToolKind, ToolInput
-from models.chat import MessageRole, TextMessage, BinaryMessage
-from models.run import AgentRequest, AgentResponse, AgentResponseUsage
+from models.agent.agent import ProviderKind
+from models.agent.tools import WebSearchInput, MCPStreamableServerInput, ToolKind, ToolInput
+from models.agent.chat import MessageRole, TextMessage, BinaryMessage
+from models.agent.run import AgentRequest, AgentResponse, AgentResponseUsage
 
 
 class AgentManager:

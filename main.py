@@ -1,19 +1,23 @@
 import os
-from fastapi import FastAPI, Depends
-from fastapi.exceptions import HTTPException
+from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from typing import Annotated
-from agent import AgentManager
-from models.run import AgentRequest, AgentResponse
+from managers.agent import AgentManager
+from managers.audio import AudioManager
+from routers.agent import agent_router
+from routers.audio import audio_router
+
 import logfire
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.agent_manager = AgentManager()
+    app.state.audio_manager = AudioManager()
     yield
 
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(agent_router)
+app.include_router(audio_router)
 
 # configure logfire
 logfire_token = os.getenv('LOGFIRE_WRITE_TOKEN', None)
@@ -28,20 +32,6 @@ async def ping():
     return {"status": "ok"}
 
 
-AgentManagerType = Annotated[AgentManager, Depends(lambda: app.state.agent_manager)]
-
-@app.post("/chat")
-async def chat(
-    payload: AgentRequest,
-    agent_manager: AgentManagerType
-) -> AgentResponse:
-    try:
-        return await agent_manager.run(payload)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=os.getenv("HOST", "0.0.0.0"), port=int(os.getenv("PORT", 8000)))

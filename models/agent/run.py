@@ -2,9 +2,9 @@
 
 from pydantic import BaseModel, Field
 from typing import Optional, List, Union
-from models.agent import AgentSettings
-from models.chat import TextMessage, BinaryMessage
-from models.tools import WebSearchInput, MCPStreamableServerInput
+from models.agent.agent import AgentSettings
+from models.agent.chat import TextMessage, BinaryMessage
+from models.agent.tools import WebSearchInput, MCPStreamableServerInput
 
 
 class AgentRequest(BaseModel):
