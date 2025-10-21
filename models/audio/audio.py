@@ -4,10 +4,13 @@ from enum import Enum
 
 
 class AudioProviderKind(Enum):
-    GOOGLE = "google"
     OPENAI = "openai"
     ELEVENLABS = "elevenlabs"
 
+
+class AudioUsage(BaseModel):
+    input_tokens: int = Field(default=0, description="The number of input tokens")
+    output_tokens: int = Field(default=0, description="The number of output tokens")
 
 class AudioSettings(BaseModel):
     provider: AudioProviderKind

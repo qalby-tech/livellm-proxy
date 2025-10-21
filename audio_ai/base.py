@@ -1,8 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple
+from typing import Tuple
 from models.audio.speak import SpeakRequest, SpeakResponse
-# from models.audio.transcribe import TranscribeRequest, TranscribeResponse
-
+from models.audio.transcribe import TranscribeRequest, TranscribeResponse
 
 class AudioAIService(ABC):
     mime_type_map = {
@@ -26,5 +25,9 @@ class AudioAIService(ABC):
     async def speak(self, request: SpeakRequest) -> SpeakResponse:
         pass
     
-    # async def transcribe(self, request: TranscribeRequest) -> TranscribeResponse:
-    #     pass
+    @abstractmethod
+    async def transcribe(self, request: TranscribeRequest) -> TranscribeResponse:
+        """
+        Transcribe audio to text
+        """
+        pass

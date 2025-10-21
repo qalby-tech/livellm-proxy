@@ -6,6 +6,7 @@ from audio_ai.elevenlabs import ElevenLabsAudioAIService
 # pydantic models
 from models.audio.audio import AudioProviderKind
 from models.audio.speak import SpeakRequest, SpeakResponse
+from models.audio.transcribe import TranscribeRequest, TranscribeResponse
 
 
 class AudioManager:
@@ -68,3 +69,23 @@ class AudioManager:
         
         # Call the speak method on the service
         return await service.speak(request)
+    
+    async def transcribe(self, request: TranscribeRequest) -> TranscribeResponse:
+        """
+        Transcribe audio to text using the specified provider.
+        
+        Args:
+            request: TranscribeRequest containing settings, audio file, and language
+            
+        Returns:
+            TranscribeResponse containing transcribed text, detected language, and usage
+        """
+        # Create the service using the cached provider
+        service = self.create_service(
+            provider=request.settings.provider,
+            api_key=request.settings.api_key,
+            base_url=request.settings.base_url
+        )
+        
+        # Call the transcribe method on the service
+        return await service.transcribe(request)
