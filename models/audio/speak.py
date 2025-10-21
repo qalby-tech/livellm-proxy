@@ -1,7 +1,9 @@
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, TypeAlias, Tuple, AsyncIterator
 from models.audio.audio import AudioSettings
 
+
+SpeakStreamResponse: TypeAlias = Tuple[AsyncIterator[bytes], str, int]
 
 class SpeakRequest(BaseModel):
     settings: AudioSettings = Field(..., description="The settings for the audio")

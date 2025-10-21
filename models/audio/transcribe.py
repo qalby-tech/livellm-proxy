@@ -1,7 +1,6 @@
 from pydantic import BaseModel, Field
 from models.audio.audio import AudioSettings
 from typing import Tuple, TypeAlias, Optional
-from models.audio.audio import AudioUsage
 
 File: TypeAlias = Tuple[str, bytes, str] # (filename, file_content, content_type)
 

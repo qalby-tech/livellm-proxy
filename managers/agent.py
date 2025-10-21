@@ -1,5 +1,5 @@
 from pydantic_ai import Agent
-from typing import Optional, List, Dict, Union, Tuple
+from typing import Optional, List, Dict, Union, Tuple, AsyncIterator
 
 # tools
 from pydantic_ai import WebSearchTool
@@ -8,6 +8,7 @@ from pydantic_ai.mcp import MCPServerStreamableHTTP
 # messages
 from pydantic_ai import BinaryContent, ModelMessage, ModelRequest, ModelResponse
 from pydantic_ai.messages import UserPromptPart, TextPart, SystemPromptPart
+from pydantic_ai.result import StreamedRunResult 
 
 # openai
 from openai import AsyncOpenAI
@@ -175,22 +176,57 @@ class AgentManager:
     def convert_msgs(self, msgs: List[Union[TextMessage, BinaryMessage]]) -> List[Union[ModelMessage, ModelResponse]]:
         return [self.convert_msg(msg) for msg in msgs]
         
+    async def _run_stream_generator(
+        self,
+        model,
+        prompt: str,
+        history: List[Union[ModelMessage, ModelResponse]],
+        builtin_tools: List,
+        mcp_servers: List
+    ) -> AsyncIterator[AgentResponse]:
+        """Internal generator that properly manages the streaming context"""
+        async with self.agent:
+            async with self.agent.run_stream(
+                model=model,
+                user_prompt=prompt,
+                message_history=history,
+                builtin_tools=builtin_tools,
+                toolsets=mcp_servers
+            ) as stream_response:
+                async for text in stream_response.stream_output(debounce_by=0.1):
+                    usage = stream_response.usage()
+                    yield AgentResponse(
+                        output=text,
+                        usage=AgentResponseUsage(
+                            input_tokens=usage.input_tokens,
+                            output_tokens=usage.output_tokens,
+                        )
+                    )
+                # Final chunk with complete usage statistics
+                usage = stream_response.usage()
+                yield AgentResponse(
+                    output="",
+                    usage=AgentResponseUsage(
+                        input_tokens=usage.input_tokens,
+                        output_tokens=usage.output_tokens,
+                    )
+                )
     
     async def run(
         self,
         agent_request: AgentRequest,
-    ) -> AgentResponse:
+        stream: bool = False
+    ) -> Union[AsyncIterator[AgentResponse], AgentResponse]:
         """
         Run an agent in stateless mode with message history.
         
         Args:
-            inputs: Agent configuration (provider, model, API key, etc.)
-            messages: List of messages - last message must be from USER
+            agent_request: Agent configuration (provider, model, API key, messages, tools, etc.)
+            stream: If True, returns an async generator for streaming responses
             
         Returns:
-            Response containing:
-                - output: The text response from the model
-                - usage: Token usage statistics
+            If stream=False: AgentResponse with the complete output and usage
+            If stream=True: AsyncIterator[AgentResponse] that yields chunks as they arrive
         """
         if not agent_request.messages:
             raise ValueError("Messages list cannot be empty")
@@ -211,28 +247,36 @@ class AgentManager:
         history = agent_request.messages[:-1]
         history = self.convert_msgs(history)
         
-        
         # Setup builtin tools
         builtin_tools, mcp_servers = self.create_tools(agent_request.tools)
         
-        
         # Run the agent with all parameters
-        async with self.agent:
-            result = await self.agent.run(
+        if stream:
+            # Return the generator directly - it manages its own context
+            return self._run_stream_generator(
                 model=model,
-                user_prompt=prompt.content,
-                message_history=history,
+                prompt=prompt.content,
+                history=history,
                 builtin_tools=builtin_tools,
-                toolsets=mcp_servers
+                mcp_servers=mcp_servers
             )
-            
-            usage = result.usage()
-            return AgentResponse(
-                output=result.output, 
-                usage=AgentResponseUsage(
-                    input_tokens=usage.input_tokens,
-                    output_tokens=usage.output_tokens,
-                ))
+        else:
+            async with self.agent:
+                result = await self.agent.run(
+                    model=model,
+                    user_prompt=prompt.content,
+                    message_history=history,
+                    builtin_tools=builtin_tools,
+                    toolsets=mcp_servers
+                )
+                
+                usage = result.usage()
+                return AgentResponse(
+                    output=result.output, 
+                    usage=AgentResponseUsage(
+                        input_tokens=usage.input_tokens,
+                        output_tokens=usage.output_tokens,
+                    ))
 
 
     

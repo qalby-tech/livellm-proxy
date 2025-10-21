@@ -1,12 +1,10 @@
 from openai import AsyncOpenAI
 from openai import HttpxBinaryResponseContent
-from openai.types.audio import TranscriptionCreateResponse
 from openai.types.audio import Transcription
 from audio_ai.base import AudioAIService
-from models.audio.speak import SpeakRequest, SpeakResponse
+from models.audio.speak import SpeakRequest, SpeakResponse, SpeakStreamResponse
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse
-from models.audio.audio import AudioUsage
-from typing import Optional, Tuple
+from typing import Optional, Tuple, AsyncIterator
 import logfire
 
 class OpenAIAudioAIService(AudioAIService):
@@ -36,6 +34,23 @@ class OpenAIAudioAIService(AudioAIService):
         )
         return SpeakResponse(audio=speech.content, content_type=mime_type, sample_rate=sample_rate)
     
+    
+    @logfire.instrument(span_name="OpenAI Stream Speak", record_return=True)
+    async def stream_speak(self, request: SpeakRequest) -> SpeakStreamResponse:
+        config = request.gen_config or {}
+        mime_type, sample_rate = self.decode_output_format(request.output_format)
+        async with self.client.audio.speech.with_streaming_response.create(
+            model=request.settings.model,
+            input=request.text,
+            voice=request.voice,
+            response_format=request.output_format,
+            **config
+        ) as stream_response:
+            async def _openai_stream_speeeh_generator() -> AsyncIterator[bytes]:
+                async for chunk in stream_response:
+                    yield chunk
+            return _openai_stream_speeeh_generator(), mime_type, sample_rate
+    
     @logfire.instrument(span_name="OpenAI Transcribe", record_return=True)
     async def transcribe(self, request: TranscribeRequest) -> TranscribeResponse:
         config = request.gen_config or {}
@@ -49,3 +64,4 @@ class OpenAIAudioAIService(AudioAIService):
             text=transcription.text, 
             language=request.language or "auto"
             )
+    

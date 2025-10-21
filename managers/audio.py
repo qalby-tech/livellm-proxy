@@ -5,7 +5,7 @@ from audio_ai.elevenlabs import ElevenLabsAudioAIService
 
 # pydantic models
 from models.audio.audio import AudioProviderKind
-from models.audio.speak import SpeakRequest, SpeakResponse
+from models.audio.speak import SpeakRequest, SpeakResponse, SpeakStreamResponse
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse
 
 
@@ -50,15 +50,17 @@ class AudioManager:
         self.services[cache_key] = new_service
         return new_service
     
-    async def speak(self, request: SpeakRequest) -> SpeakResponse:
+    async def speak(self, request: SpeakRequest, stream: bool = False) -> Union[SpeakResponse, SpeakStreamResponse]:
         """
         Convert text to speech using the specified provider.
         
         Args:
             request: SpeakRequest containing settings, text, voice, and output format
+            stream: If True, returns SpeakStreamResponse. If False, returns SpeakResponse
             
         Returns:
-            SpeakResponse containing audio data, content type, and sample rate
+            If stream=False: SpeakResponse containing audio data, content type, and sample rate
+            If stream=True: SpeakStreamResponse (tuple of AsyncIterator[bytes], mime_type, sample_rate)
         """
         # Create the service using the cached provider
         service = self.create_service(
@@ -68,7 +70,10 @@ class AudioManager:
         )
         
         # Call the speak method on the service
-        return await service.speak(request)
+        if stream:
+            return await service.stream_speak(request)
+        else:
+            return await service.speak(request)
     
     async def transcribe(self, request: TranscribeRequest) -> TranscribeResponse:
         """

@@ -1,10 +1,9 @@
 from elevenlabs import AsyncElevenLabs
 from elevenlabs import SpeechToTextConvertResponse
 from audio_ai.base import AudioAIService
-from models.audio.speak import SpeakRequest, SpeakResponse
-from typing import Optional, Tuple
+from models.audio.speak import SpeakRequest, SpeakResponse, SpeakStreamResponse
+from typing import Optional, Tuple, AsyncIterator
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse
-from models.audio.audio import AudioUsage
 import logfire
 
 
@@ -46,6 +45,22 @@ class ElevenLabsAudioAIService(AudioAIService):
             speech_data += chunk
         return SpeakResponse(audio=speech_data, content_type=mime_type, sample_rate=sample_rate)
     
+
+    @logfire.instrument(span_name="ElevenLabs Stream Speak", record_return=True)
+    async def stream_speak(self, request: SpeakRequest) -> SpeakStreamResponse:
+        config = request.gen_config or {}
+        mime_type, sample_rate = self.decode_output_format(request.output_format)
+        speech_stream = await self.client.text_to_speech.stream(
+            text=request.text,
+            voice_id=request.voice,
+            model_id=request.settings.model,
+            output_format=request.output_format,
+            **config
+        )
+        async def _elevenlabs_stream_speak_generator() -> AsyncIterator[bytes]:
+            async for chunk in speech_stream:
+                yield chunk
+        return _elevenlabs_stream_speak_generator(), mime_type, sample_rate
     
     @logfire.instrument(span_name="ElevenLabs Transcribe", record_return=True)
     async def transcribe(self, request: TranscribeRequest) -> TranscribeResponse:

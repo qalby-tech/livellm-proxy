@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Tuple
-from models.audio.speak import SpeakRequest, SpeakResponse
+from typing import Tuple, AsyncIterator
+from models.audio.speak import SpeakRequest, SpeakResponse, SpeakStreamResponse
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse
 
 class AudioAIService(ABC):
@@ -24,10 +24,21 @@ class AudioAIService(ABC):
     @abstractmethod
     async def speak(self, request: SpeakRequest) -> SpeakResponse:
         pass
-    
+
+    @abstractmethod
+    async def stream_speak(self, request: SpeakRequest) -> SpeakStreamResponse:
+        """
+        Returns a tuple of (async iterator of bytes, mime type, sample rate)
+        """
+        pass
+
     @abstractmethod
     async def transcribe(self, request: TranscribeRequest) -> TranscribeResponse:
         """
         Transcribe audio to text
         """
+        pass
+
+    @abstractmethod
+    async def stream_transcribe(self, request: TranscribeRequest) -> AsyncIterator[TranscribeResponse]:
         pass

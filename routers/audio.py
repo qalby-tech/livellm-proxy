@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Request, Response, Form, UploadFile, File
+from fastapi.responses import StreamingResponse
 from fastapi.exceptions import HTTPException
-from typing import Annotated, Optional
+from typing import Annotated, Optional, AsyncIterator
 import json
 from managers.audio import AudioManager
 from models.audio.speak import SpeakRequest, SpeakResponse
@@ -33,6 +34,28 @@ async def audio_speak(
             media_type=result.content_type,
             headers={
                 "X-Sample-Rate": str(result.sample_rate)
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@audio_router.post("/speak_stream", response_class=Response)
+async def audio_speak_stream(
+    payload: SpeakRequest,
+    audio_manager: AudioManagerType
+) -> Response:
+    """
+    Convert text to speech using the specified audio provider.
+    Returns raw audio bytes with appropriate content type.
+    """
+    try:
+        generator, mime_type, sample_rate = await audio_manager.speak(payload, stream=True)
+        return StreamingResponse(
+            generator,
+            media_type=mime_type,
+            headers={
+                "X-Sample-Rate": str(sample_rate)
             }
         )
     except Exception as e:
