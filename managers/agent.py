@@ -9,7 +9,6 @@ from pydantic_ai.mcp import MCPServerStreamableHTTP
 # messages
 from pydantic_ai import BinaryContent, ModelMessage, ModelRequest, ModelResponse
 from pydantic_ai.messages import UserPromptPart, TextPart, SystemPromptPart
-from pydantic_ai.result import StreamedRunResult 
 
 # openai
 from openai import AsyncOpenAI
@@ -37,6 +36,7 @@ from models.common import Settings, ProviderKind
 from models.agent.tools import WebSearchInput, MCPStreamableServerInput, ToolKind, ToolInput
 from models.agent.chat import MessageRole, TextMessage, BinaryMessage
 from models.agent.run import AgentRequest, AgentResponse, AgentResponseUsage
+import base64
 
 
 class AgentManager:
@@ -158,7 +158,9 @@ class AgentManager:
             elif isinstance(msg, BinaryMessage):
                 if msg.caption:
                     parts.append(UserPromptPart(content=msg.caption))
-                parts.append(BinaryContent(data=msg.content, media_type=msg.mime_type))
+                # Decode base64 string to bytes for BinaryContent
+                binary_data = base64.b64decode(msg.content)
+                parts.append(BinaryContent(data=binary_data, media_type=msg.mime_type))
             else:
                 raise ValueError(f"Unknown message type: {type(msg)}")
             return ModelRequest(parts=parts)
@@ -180,7 +182,7 @@ class AgentManager:
     async def _run_stream_generator(
         self,
         model,
-        prompt: str,
+        prompt: List[Union[str, BinaryContent]],
         history: List[Union[ModelMessage, ModelResponse]],
         builtin_tools: List,
         mcp_servers: List
@@ -216,7 +218,7 @@ class AgentManager:
     async def _validated_stream_generator(
         self,
         model,
-        prompt: str,
+        prompt: List[Union[str, BinaryContent]],
         history: List[Union[ModelMessage, ModelResponse]],
         builtin_tools: List,
         mcp_servers: List
@@ -275,9 +277,10 @@ class AgentManager:
         prompt = payload.messages[-1]
         if prompt.role != MessageRole.USER:
             raise ValueError("Last message must be from user")
-        history = payload.messages[:-1]
-        history = self.convert_msgs(history)
-        
+        converted_messages = self.convert_msgs(payload.messages)
+        prompt = [part.content if isinstance(part, UserPromptPart) else part 
+                for part in converted_messages[-1].parts]
+        history = converted_messages[:-1]
         # Setup builtin tools
         builtin_tools, mcp_servers = self.create_tools(payload.tools)
         
@@ -286,7 +289,7 @@ class AgentManager:
             # Return the validated generator that checks first token before streaming
             return self._validated_stream_generator(
                 model=model,
-                prompt=prompt.content,
+                prompt=prompt,
                 history=history,
                 builtin_tools=builtin_tools,
                 mcp_servers=mcp_servers
@@ -295,7 +298,7 @@ class AgentManager:
             async with self.agent:
                 result = await self.agent.run(
                     model=model,
-                    user_prompt=prompt.content,
+                    user_prompt=prompt,
                     message_history=history,
                     builtin_tools=builtin_tools,
                     toolsets=mcp_servers

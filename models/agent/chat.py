@@ -18,7 +18,7 @@ class TextMessage(Message):
 
 class BinaryMessage(Message):
     """always from user"""
-    content: bytes = Field(..., description="The content of the message")
+    content: str = Field(..., description="The base64 encoded content of the message")
     mime_type: str = Field(..., description="The MIME type of the content, only user can supply such")
     caption: Optional[str] = Field(None, description="Caption for the binary message")
 
