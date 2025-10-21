@@ -47,9 +47,5 @@ class OpenAIAudioAIService(AudioAIService):
         )
         return TranscribeResponse(
             text=transcription.text, 
-            language=request.language or "auto", 
-            usage=AudioUsage(
-                input_tokens=0, 
-                output_tokens=0
-                )
+            language=request.language or "auto"
             )

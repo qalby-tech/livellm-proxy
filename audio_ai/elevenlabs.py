@@ -56,12 +56,7 @@ class ElevenLabsAudioAIService(AudioAIService):
             model_id=request.settings.model,
             **config
         )
-        print(transcription)
         return TranscribeResponse(
             text=transcription.text, 
-            language=transcription.language_code, 
-            usage=AudioUsage(
-                input_tokens=0, 
-                output_tokens=0
-            )
+            language=transcription.language_code
         )

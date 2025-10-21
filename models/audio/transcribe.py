@@ -15,4 +15,3 @@ class TranscribeRequest(BaseModel):
 class TranscribeResponse(BaseModel):
     text: str = Field(..., description="The text of the transcription")
     language: Optional[str] = Field(default=None, description="The language of the transcription")
-    usage: AudioUsage = Field(..., description="The usage of the transcription")
