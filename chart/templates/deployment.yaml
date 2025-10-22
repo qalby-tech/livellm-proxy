@@ -46,9 +46,9 @@ spec:
               protocol: TCP
           env:
             - name: HOST
-              value: "{{ .Values.env.host }}"
+              value: "0.0.0.0"
             - name: PORT
-              value: "{{ .Values.env.port }}"
+              value: "{{ .Values.service.port }}"
             {{- if .Values.env.logfire_token }}
             - name: LOGFIRE_WRITE_TOKEN
               value: "{{ .Values.env.logfire_token }}"

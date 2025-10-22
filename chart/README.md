@@ -1,6 +1,19 @@
 # Qalby Proxy Helm Chart
 
-This Helm chart deploys the Qalby Proxy application, a FastAPI-based service with audio and agent capabilities.
+A Helm chart for deploying Qalby Proxy - a FastAPI application with audio and agent capabilities.
+
+## Overview
+
+This Helm chart deploys the Qalby Proxy application on a Kubernetes cluster. The application provides audio processing and AI agent capabilities through a FastAPI-based service.
+
+## Features
+
+- **Automatic Configuration**: Host and port are automatically configured based on the service port
+- **Environment Variables**: Support for Logfire and OpenTelemetry configuration
+- **Health Checks**: Built-in liveness and readiness probes
+- **Scalability**: Optional horizontal pod autoscaling
+- **Security**: Configurable security contexts and service accounts
+- **Ingress Support**: Optional ingress configuration for external access
 
 ## Prerequisites
 
@@ -9,109 +22,63 @@ This Helm chart deploys the Qalby Proxy application, a FastAPI-based service wit
 
 ## Installation
 
-1. Clone or download this chart
-2. Copy the example values file and customize it:
-   ```bash
-   cp values-example.yaml values.yaml
-   ```
-3. Edit `values.yaml` with your configuration
-4. Install the chart:
-   ```bash
-   helm install qalby-proxy ./chart -f values.yaml
-   ```
+### Add the repository (if hosted)
+
+```bash
+helm repo add qalby-proxy https://your-chart-repo-url
+helm repo update
+```
+
+### Install the chart
+
+```bash
+helm install qalby-proxy qalby-proxy/qalby-proxy
+```
+
+### Install with custom values
+
+```bash
+helm install qalby-proxy qalby-proxy/qalby-proxy -f custom-values.yaml
+```
 
 ## Configuration
 
-### Environment Variables
+### Key Configuration Options
 
-The chart supports configuration through environment variables defined in the `env` section:
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `replicaCount` | Number of replicas | `1` |
+| `image.repository` | Container image repository | `kamasalyamov/livellm-proxy` |
+| `image.tag` | Container image tag | `""` (uses Chart.appVersion) |
+| `service.port` | Service port | `8000` |
+| `service.type` | Service type | `ClusterIP` |
+| `env.logfire_token` | Logfire write token | `""` |
+| `env.otel_exporter_otlp_endpoint` | OpenTelemetry endpoint | `""` |
+
+### Automatic Configuration
+
+The chart automatically configures:
+- **HOST**: Always set to `0.0.0.0` for container binding
+- **PORT**: Automatically set to `service.port` value
+
+### Example values.yaml
 
 ```yaml
+replicaCount: 2
+
+image:
+  repository: kamasalyamov/livellm-proxy
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8000
+
 env:
-  # Logfire configuration
   logfire_token: "your-logfire-token"
-  otel_exporter_otlp_endpoint: "https://api.logfire.pydantic.dev/otlp"
-  
-  # Application configuration
-  host: "0.0.0.0"
-  port: "8000"
-  
-  # Custom environment variables
-  custom:
-    YOUR_CUSTOM_VAR: "value"
-```
+  otel_exporter_otlp_endpoint: "https://your-otel-endpoint"
 
-### Node Selection
-
-The chart provides flexible node selection options:
-
-#### Option 1: Simple Node Selector
-```yaml
-nodeSelector:
-  kubernetes.io/os: linux
-  node-type: worker
-```
-
-#### Option 2: Node Affinity
-```yaml
-affinity:
-  nodeAffinity:
-    requiredDuringSchedulingIgnoredDuringExecution:
-      nodeSelectorTerms:
-      - matchExpressions:
-        - key: node-type
-          operator: In
-          values:
-          - worker
-```
-
-#### Option 3: Pod Anti-Affinity
-```yaml
-affinity:
-  podAntiAffinity:
-    preferredDuringSchedulingIgnoredDuringExecution:
-    - weight: 100
-      podAffinityTerm:
-        labelSelector:
-          matchExpressions:
-          - key: app.kubernetes.io/name
-            operator: In
-            values:
-            - qalby-proxy
-        topologyKey: kubernetes.io/hostname
-```
-
-### Resource Management
-
-Configure resource limits and requests:
-
-```yaml
-resources:
-  limits:
-    cpu: 1000m
-    memory: 1Gi
-  requests:
-    cpu: 500m
-    memory: 512Mi
-```
-
-### Autoscaling
-
-Enable horizontal pod autoscaling:
-
-```yaml
-autoscaling:
-  enabled: true
-  minReplicas: 2
-  maxReplicas: 10
-  targetCPUUtilizationPercentage: 70
-```
-
-### Ingress
-
-Configure ingress for external access:
-
-```yaml
 ingress:
   enabled: true
   className: "nginx"
@@ -120,83 +87,79 @@ ingress:
       paths:
         - path: /
           pathType: Prefix
-  tls:
-    - secretName: qalby-proxy-tls
-      hosts:
-        - qalby-proxy.example.com
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
 ```
 
-## Values Reference
+## Development
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `replicaCount` | int | `1` | Number of replicas |
-| `image.repository` | string | `"qalby-proxy"` | Container image repository |
-| `image.tag` | string | `""` | Container image tag |
-| `env.logfire_token` | string | `""` | Logfire authentication token |
-| `env.otel_exporter_otlp_endpoint` | string | `""` | OpenTelemetry exporter endpoint |
-| `env.host` | string | `"0.0.0.0"` | Application host |
-| `env.port` | string | `"8000"` | Application port |
-| `service.type` | string | `"ClusterIP"` | Service type |
-| `service.port` | int | `8000` | Service port |
-| `ingress.enabled` | bool | `false` | Enable ingress |
-| `resources` | object | `{}` | Resource limits and requests |
-| `nodeSelector` | object | `{}` | Node selector |
-| `affinity` | object | `{}` | Pod affinity rules |
+### Local Development
 
-## Examples
-
-### Basic Deployment
-```bash
-helm install qalby-proxy ./chart \
-  --set env.logfire_token="your-token" \
-  --set replicaCount=2
-```
-
-### Production Deployment with Node Selection
-```bash
-helm install qalby-proxy ./chart \
-  --set env.logfire_token="your-token" \
-  --set replicaCount=3 \
-  --set nodeSelector.node-type=worker \
-  --set resources.limits.cpu=1000m \
-  --set resources.limits.memory=1Gi
-```
-
-### Development Deployment
-```bash
-helm install qalby-proxy-dev ./chart \
-  --set replicaCount=1 \
-  --set resources.requests.cpu=100m \
-  --set resources.requests.memory=128Mi
-```
-
-## Troubleshooting
-
-### Check Pod Status
-```bash
-kubectl get pods -l app.kubernetes.io/name=qalby-proxy
-```
-
-### View Logs
-```bash
-kubectl logs -l app.kubernetes.io/name=qalby-proxy
-```
-
-### Test Health Endpoint
-```bash
-kubectl port-forward svc/qalby-proxy 8000:8000
-curl http://localhost:8000/ping
-```
-
-## Upgrading
+1. Clone this repository
+2. Make your changes
+3. Test the chart locally:
 
 ```bash
-helm upgrade qalby-proxy ./chart -f values.yaml
+# Lint the chart
+helm lint .
+
+# Test template rendering
+helm template qalby-proxy .
+
+# Dry run installation
+helm install qalby-proxy . --dry-run --debug
 ```
 
-## Uninstalling
+### Chart Structure
 
-```bash
-helm uninstall qalby-proxy
 ```
+chart/
+├── Chart.yaml              # Chart metadata
+├── values.yaml             # Default configuration values
+├── templates/              # Kubernetes manifest templates
+│   ├── deployment.yaml     # Deployment configuration
+│   ├── service.yaml        # Service configuration
+│   ├── ingress.yaml        # Ingress configuration
+│   ├── hpa.yaml           # Horizontal Pod Autoscaler
+│   ├── serviceaccount.yaml # Service Account
+│   └── tests/             # Test templates
+└── README.md              # This file
+```
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
+
+## License
+
+This chart is licensed under the same license as the Qalby Proxy application.
+
+## Support
+
+For issues and questions:
+- Create an issue in the repository
+- Contact the maintainers
+
+## Changelog
+
+### 0.1.0
+- Initial release
+- Automatic host/port configuration
+- Support for Logfire and OpenTelemetry
+- Health checks and autoscaling support
