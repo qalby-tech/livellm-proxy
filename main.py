@@ -25,7 +25,7 @@ otel_exporter = os.getenv('OTEL_EXPORTER_OTLP_ENDPOINT')
 logfire.configure(service_name="livellm-proxy", send_to_logfire="if-token-present", token=logfire_token)
 logfire.instrument_pydantic_ai()
 logfire.instrument_mcp()
-logfire.instrument_fastapi(app, capture_headers=True)
+logfire.instrument_fastapi(app, capture_headers=True, exclude_urls="/ping")
 
 @app.get("/ping")
 async def ping():
