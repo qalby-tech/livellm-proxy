@@ -1,4 +1,4 @@
-from typing import Dict, Union, Optional
+from typing import Dict, Union, Optional, Tuple
 from audio_ai.base import AudioAIService
 from audio_ai.openai import OpenAIAudioAIService
 from audio_ai.elevenlabs import ElevenLabsAudioAIService
@@ -8,49 +8,39 @@ from models.common import Settings, ProviderKind
 from models.audio.speak import SpeakRequest, SpeakResponse, SpeakStreamResponse
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse
 
+# managers
+from managers.config import ConfigManager, ProviderClient
 
 class AudioManager:
     
-    def __init__(self):
-        self.services: Dict[str, Union[OpenAIAudioAIService, ElevenLabsAudioAIService]] = {}
-    
-    def _get_service_cache_key(self, provider: ProviderKind, api_key: str, base_url: Optional[str] = None) -> str:
-        """Generate a unique cache key for a service configuration"""
-        base = base_url or "default"
-        return f"{provider.value}:{api_key}:{base}"
+    def __init__(self, config_manager: ConfigManager):
+        self.config_manager = config_manager
+
     
     def create_service(
         self, 
-        provider: ProviderKind, 
-        api_key: str, 
-        base_url: Optional[str] = None
+        uid: str,
+        model: str,
     ) -> AudioAIService:
         """
-        Create or retrieve a cached audio service instance.
-        If a service with the same configuration already exists, return it.
-        Otherwise, create a new one and cache it.
-        """
-        cache_key = self._get_service_cache_key(provider, api_key, base_url)
-        
-        # Check if service already exists in cache
-        if cache_key in self.services:
-            return self.services[cache_key]
-        
+        Create an audio service using the cached provider
+        """        
+        provider_kind, provider_client: Tuple[ProviderKind, ProviderClient] = self.config_manager.get_provider(uid, model)
         # Create new service based on type
-        if provider == ProviderKind.OPENAI:
-            new_service = OpenAIAudioAIService(api_key=api_key, base_url=base_url)
-        elif provider == ProviderKind.ELEVENLABS:
-            new_service = ElevenLabsAudioAIService(api_key=api_key, base_url=base_url)
+        service: AudioAIService
+        if provider_kind == ProviderKind.OPENAI:
+            service = OpenAIAudioAIService
+        elif provider_kind == ProviderKind.ELEVENLABS:
+            service = ElevenLabsAudioAIService
         else:
-            raise ValueError(f"Provider {provider} not supported for audio services")
+            raise ValueError(f"Provider {provider_kind} not supported for audio services")
         
         # Cache and return the new service
-        self.services[cache_key] = new_service
-        return new_service
+        return service(client=provider_client)
     
     async def speak(
         self, 
-        settings: Settings,
+        uid: str,
         payload: SpeakRequest, 
         stream: bool = False
     ) -> Union[SpeakResponse, SpeakStreamResponse]:
@@ -68,9 +58,8 @@ class AudioManager:
         """
         # Create the service using the cached provider
         service = self.create_service(
-            provider=settings.provider,
-            api_key=settings.api_key,
-            base_url=settings.base_url
+            uid=uid,
+            model=payload.model
         )
         
         # Call the speak method on the service
@@ -81,7 +70,7 @@ class AudioManager:
     
     async def transcribe(
         self, 
-        settings: Settings,
+        uid: str,
         payload: TranscribeRequest,
         stream: bool = False
     ) -> TranscribeResponse:
@@ -98,9 +87,8 @@ class AudioManager:
         """
         # Create the service using the cached provider
         service = self.create_service(
-            provider=settings.provider,
-            api_key=settings.api_key,
-            base_url=settings.base_url
+            uid=uid,
+            model=payload.model
         )
         
         # Call the transcribe method on the service

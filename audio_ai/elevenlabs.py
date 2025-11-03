@@ -2,19 +2,15 @@ from elevenlabs import AsyncElevenLabs
 from elevenlabs import SpeechToTextConvertResponse
 from audio_ai.base import AudioAIService
 from models.audio.speak import SpeakRequest, SpeakResponse, SpeakStreamResponse
-from typing import Optional, Tuple, AsyncIterator
+from typing import Tuple, AsyncIterator
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse
 import logfire
 
 
 class ElevenLabsAudioAIService(AudioAIService):
-    def __init__(self, api_key: str, base_url: Optional[str] = None):
-        if base_url:
-            self.client = AsyncElevenLabs(api_key=api_key, base_url=base_url)
-        else:
-            self.client = AsyncElevenLabs(api_key=api_key)
+    def __init__(self, client: AsyncElevenLabs):
+        self.client = client
 
-    
     def decode_output_format(self, output_format: str) -> Tuple[str, int]:
         """
         elevenlabs output format is like this: mp3_16000_16_stereo

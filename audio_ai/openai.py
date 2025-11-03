@@ -9,8 +9,8 @@ from typing import Optional, Tuple, AsyncIterator
 import logfire
 
 class OpenAIAudioAIService(AudioAIService):
-    def __init__(self, api_key: str, base_url: Optional[str] = None):
-        self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    def __init__(self, client: AsyncOpenAI):
+        self.client = client
     
     def decode_output_format(self, output_format: str) -> Tuple[str, int]:
         """

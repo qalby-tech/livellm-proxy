@@ -29,6 +29,7 @@ class MCPStreamableServerInput(ToolInput):
     kind: ToolKind = Field(ToolKind.MCP_STREAMABLE_SERVER, description="Mcp kind of tool")
     url: str = Field(..., description="The URL of the MCP server")
     prefix: str = Field(..., description="The prefix of the MCP server")
+    timeout: int = Field(15, description="The timeout in seconds for the MCP server")
 
     @field_validator('kind')
     def validate_kind(cls, v):

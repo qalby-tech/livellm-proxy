@@ -5,8 +5,6 @@ from typing import Annotated, AsyncIterator, Optional
 from managers.agent import AgentManager
 from models.common import Settings, ProviderKind
 from models.agent.run import AgentRequest, AgentResponse
-import json
-
 
 agent_router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -19,29 +17,21 @@ AgentManagerType = Annotated[AgentManager, Depends(get_agent_manager)]
 async def agent_run(
     payload: AgentRequest,
     agent_manager: AgentManagerType,
-    x_api_key: str = Header(..., description="API key for the provider"),
-    x_provider: str = Header(..., description="Provider to use (openai, google, anthropic, groq)"),
-    x_base_url: Optional[str] = Header(None, description="Optional custom base URL for the provider")
+    x_provider_uid: str = Header(..., alias="X-Provider-UID", description="Provider UID configured via POST /config"),
 ) -> AgentResponse:
     """
-    Run an agent with the specified provider settings from headers.
+    Run an agent request using the specified provider configuration.
+    
+    The provider UID must be configured first using POST /config endpoint.
     
     Headers:
-        X-Api-Key: API key for the provider
-        X-Provider: Provider to use (openai, google, anthropic, groq)
-        X-Base-Url: Optional custom base URL for the provider
+        X-Provider-UID: The unique identifier of the provider configuration to use
     """
     try:
-        # Build settings from headers
-        settings = Settings(
-            provider=ProviderKind(x_provider.lower()),
-            api_key=x_api_key,
-            base_url=x_base_url
-        )
-        result: AgentResponse = await agent_manager.run(settings, payload, stream=False)
+        result: AgentResponse = await agent_manager.run(x_provider_uid, payload, stream=False)
         return result
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid provider: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -49,34 +39,24 @@ async def agent_run(
 async def agent_run_stream(
     payload: AgentRequest,
     agent_manager: AgentManagerType,
-    x_api_key: str = Header(..., description="API key for the provider"),
-    x_provider: str = Header(..., description="Provider to use (openai, google, anthropic, groq)"),
-    x_base_url: Optional[str] = Header(None, description="Optional custom base URL for the provider")
+    x_provider_uid: str = Header(..., alias="X-Provider-UID", description="Provider UID configured via POST /config"),
 ):
     """
     Stream agent responses as newline-delimited JSON (NDJSON).
     Each line is a JSON object with 'output' and 'usage' fields.
     
+    The provider UID must be configured first using POST /config endpoint.
+    
     Headers:
-        X-Api-Key: API key for the provider
-        X-Provider: Provider to use (openai, google, anthropic, groq)
-        X-Base-Url: Optional custom base URL for the provider
+        X-Provider-UID: The unique identifier of the provider configuration to use
     """
     try:
-        # Build settings from headers
-        settings = Settings(
-            provider=ProviderKind(x_provider.lower()),
-            api_key=x_api_key,
-            base_url=x_base_url
-        )
-        
-        agent_stream: AsyncIterator[AgentResponse] = await agent_manager.run(settings, payload, stream=True)
- 
+        agent_stream: AsyncIterator[AgentResponse] = await agent_manager.run(x_provider_uid, payload, stream=True)
         return StreamingResponse(
             agent_stream,
             media_type="application/x-ndjson"
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid provider: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

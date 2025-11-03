@@ -18,7 +18,12 @@ class ProviderKind(Enum):
 
 class Settings(BaseModel):
     """Base settings for all service providers"""
+    uid: str = Field(..., description="The unique identifier of the provider configuration")
     provider: ProviderKind = Field(..., description="The provider to use")
     api_key: str = Field(..., description="API key for the provider")
     base_url: Optional[str] = Field(None, description="Optional custom base URL for the provider")
+    blacklist_models: Optional[list[str]] = Field(None, description="models selection for blacklist")
 
+class SuccessResponse(BaseModel):
+    success: bool = Field(True, description="Whether the operation was successful")
+    message: str = Field("ok", description="The message of the operation")
