@@ -29,14 +29,13 @@ class AudioManager:
         # Create new service based on type
         service: AudioAIService
         if provider_kind == ProviderKind.OPENAI:
-            service = OpenAIAudioAIService
+            service = OpenAIAudioAIService(client=provider_client)
         elif provider_kind == ProviderKind.ELEVENLABS:
-            service = ElevenLabsAudioAIService
+            service = ElevenLabsAudioAIService(client=provider_client)
         else:
             raise ValueError(f"Provider {provider_kind} not supported for audio services")
         
-        # Cache and return the new service
-        return service(client=provider_client)
+        return service
     
     async def speak(
         self, 
@@ -71,16 +70,14 @@ class AudioManager:
     async def transcribe(
         self, 
         uid: str,
-        payload: TranscribeRequest,
-        stream: bool = False
+        payload: TranscribeRequest
     ) -> TranscribeResponse:
         """
         Transcribe audio to text using the specified provider.
         
         Args:
-            settings: Provider settings (provider, API key, base URL)
+            uid: The unique identifier of the provider configuration
             payload: TranscribeRequest containing model, audio file, and language
-            stream: Not used for transcription (kept for consistency)
             
         Returns:
             TranscribeResponse containing transcribed text, detected language, and usage

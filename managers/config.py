@@ -55,15 +55,18 @@ class ConfigManager:
         self.providers.pop(uid)
     
     def create_provider_client(self, settings: Settings) -> ProviderClient:
+        # Extract the actual API key from SecretStr
+        api_key = settings.api_key.get_secret_value()
+        
         if settings.provider == ProviderKind.OPENAI:
-            return AsyncOpenAI(api_key=settings.api_key, base_url=settings.base_url)
+            return AsyncOpenAI(api_key=api_key, base_url=settings.base_url)
         elif settings.provider == ProviderKind.GOOGLE:
-            return genai.Client(api_key=settings.api_key, http_options=genai.types.HttpOptions(base_url=settings.base_url))
+            return genai.Client(api_key=api_key, http_options=genai.types.HttpOptions(base_url=settings.base_url))
         elif settings.provider == ProviderKind.ANTHROPIC:
-            return AsyncAnthropic(api_key=settings.api_key, base_url=settings.base_url)
+            return AsyncAnthropic(api_key=api_key, base_url=settings.base_url)
         elif settings.provider == ProviderKind.GROQ:
-            return AsyncGroq(api_key=settings.api_key, base_url=settings.base_url)
+            return AsyncGroq(api_key=api_key, base_url=settings.base_url)
         elif settings.provider == ProviderKind.ELEVENLABS:
-            return AsyncElevenLabs(api_key=settings.api_key, base_url=settings.base_url)
+            return AsyncElevenLabs(api_key=api_key, base_url=settings.base_url)
         else:
             raise ValueError(f"Provider {settings.provider} not supported")

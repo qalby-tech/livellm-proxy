@@ -1,5 +1,9 @@
 from typing import AsyncGenerator, AsyncIterator
 
+# Constants for PCM16 audio
+BYTES_PER_SAMPLE_PCM16 = 2  # 16-bit audio = 2 bytes per sample
+MS_TO_SECONDS = 1000.0
+
 
 class ChunkCollector:
     """
@@ -11,7 +15,7 @@ class ChunkCollector:
         self.chunk_size_ms = chunk_size_ms
         # Calculate exact bytes needed for chunk_size_ms
         # For PCM16: 2 bytes per sample (16-bit audio)
-        self.bytes_per_chunk = int((self.chunk_size_ms / 1000.0) * self.sample_rate * 2)
+        self.bytes_per_chunk = int((self.chunk_size_ms / MS_TO_SECONDS) * self.sample_rate * BYTES_PER_SAMPLE_PCM16)
         self.audio_buffer = b""
     
     async def collect_chunks(self, audio_data: bytes) -> AsyncGenerator[bytes, None]:

@@ -38,7 +38,16 @@ class AudioAIService(ABC):
         Processing pipeline: native audio -> resample -> chunk to fixed sizes -> encode
         """
         generator = await self.stream_text2speech(request.model, request.text, request.voice, request.gen_config)
-        first_chunk = await generator.__anext__()
+        
+        # Handle empty generator case
+        try:
+            first_chunk = await generator.__anext__()
+        except StopAsyncIteration:
+            # Return empty generator for empty response
+            async def empty_generator() -> AsyncIterator[bytes]:
+                yield b""
+            return empty_generator(), request.mime_type.value, request.sample_rate
+        
         resampler = Resampler(self.default_sample_rate, request.sample_rate)
         chunk_collector = ChunkCollector(request.sample_rate, request.chunk_size)
         encoder = AudioEncoder(request.sample_rate, request.mime_type)

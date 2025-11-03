@@ -27,10 +27,9 @@ class ElevenLabsAudioAIService(AudioAIService):
             output_format=self.default_output_format,
             **config
         )
-        speech_data = bytearray()
-        for chunk in speech:
-            speech_data += chunk
-        return speech_data
+        # Collect all chunks efficiently
+        chunks = [chunk for chunk in speech]
+        return b"".join(chunks)
     
     async def stream_text2speech(self, model: str, text: str, voice: str, gen_config: Optional[dict] = None) -> AsyncIterator[bytes]:
         config = gen_config or {}

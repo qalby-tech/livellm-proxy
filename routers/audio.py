@@ -3,6 +3,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.exceptions import HTTPException
 from typing import Annotated, Optional, AsyncIterator
 import json
+import logfire
 from managers.audio import AudioManager
 from models.common import Settings, ProviderKind
 from models.audio.speak import SpeakRequest, SpeakResponse
@@ -34,7 +35,6 @@ async def audio_speak(
         X-Provider-UID: The unique identifier of the provider configuration to use
     """
     try:
-
         result: SpeakResponse = await audio_manager.speak(x_provider_uid, payload, stream=False)
         return Response(
             content=result.audio,
@@ -46,7 +46,8 @@ async def audio_speak(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logfire.error(f"Unexpected error in audio_speak: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @audio_router.post("/speak_stream", response_class=Response)
@@ -65,13 +66,9 @@ async def audio_speak_stream(
         X-Provider-UID: The unique identifier of the provider configuration to use
     """
     try:
-
         generator, mime_type, sample_rate = await audio_manager.speak(x_provider_uid, payload, stream=True)
-        async def _generator() -> AsyncIterator[bytes]:
-            async for chunk in generator:
-                yield chunk
         return StreamingResponse(
-            _generator(),
+            generator,
             media_type=mime_type,
             headers={
                 "X-Sample-Rate": str(sample_rate)
@@ -80,7 +77,8 @@ async def audio_speak_stream(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logfire.error(f"Unexpected error in audio_speak_stream: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @audio_router.post("/transcribe")
 async def audio_transcribe(
@@ -101,11 +99,17 @@ async def audio_transcribe(
         X-Provider-UID: The unique identifier of the provider configuration to use
     """
     try:
-
+        # Validate content type
+        if file.content_type and not file.content_type.startswith('audio/'):
+            raise HTTPException(status_code=400, detail=f"Invalid file type. Expected audio file, got {file.content_type}")
+        
         # Parse gen_config if provided
         parsed_gen_config = None
         if gen_config:
-            parsed_gen_config = json.loads(gen_config)
+            try:
+                parsed_gen_config = json.loads(gen_config)
+            except json.JSONDecodeError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid JSON in gen_config: {str(e)}")
         
         # Read file contents
         file_content = await file.read()
@@ -120,12 +124,15 @@ async def audio_transcribe(
         )
         
         # Call the transcribe method on the manager
-        result: TranscribeResponse = await audio_manager.transcribe(x_provider_uid, transcribe_request, stream=False)
+        result: TranscribeResponse = await audio_manager.transcribe(x_provider_uid, transcribe_request)
         return result
     
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid JSON in gen_config: {str(e)}")
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid provider: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logfire.error(f"Unexpected error in audio_transcribe: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        await file.close()

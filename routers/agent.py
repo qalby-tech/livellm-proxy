@@ -5,6 +5,7 @@ from typing import Annotated, AsyncIterator, Optional
 from managers.agent import AgentManager
 from models.common import Settings, ProviderKind
 from models.agent.run import AgentRequest, AgentResponse
+import logfire
 
 agent_router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -33,7 +34,8 @@ async def agent_run(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logfire.error(f"Unexpected error in agent_run: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @agent_router.post("/run_stream")
 async def agent_run_stream(
@@ -59,4 +61,5 @@ async def agent_run_stream(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logfire.error(f"Unexpected error in agent_run_stream: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
