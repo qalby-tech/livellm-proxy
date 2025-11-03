@@ -69,12 +69,12 @@ class AgentManager:
             if isinstance(tool, WebSearchInput):
                 if ToolKind.WEB_SEARCH not in init_cache:
                     # using tool's unique key to deduplicate
-                    builtin_tools.append(WebSearchTool(search_context_size=tool.search_context_size))
+                    builtin_tools.append(WebSearchTool(search_context_size=tool.search_context_size, **tool.kwargs))
                     init_cache.add(ToolKind.WEB_SEARCH)
             elif isinstance(tool, MCPStreamableServerInput):
                 if tool.url not in init_cache:
                     # using url to deduplicate mcp
-                    mcp_servers.append(MCPServerStreamableHTTP(url=tool.url, tool_prefix=tool.prefix, timeout=tool.timeout))
+                    mcp_servers.append(MCPServerStreamableHTTP(url=tool.url, tool_prefix=tool.prefix, timeout=tool.timeout, **tool.kwargs))
                     init_cache.add(tool.url)
             else:
                 raise ValueError(f"Unknown tool kind: {tool.kind}")

@@ -7,9 +7,9 @@ from openai import AsyncOpenAI
 from google import genai
 from anthropic import AsyncAnthropic
 from groq import AsyncGroq
-from elevenlabs import ElevenLabs
+from elevenlabs import AsyncElevenLabs
 
-ProviderClient: TypeAlias = Union[AsyncOpenAI, genai.Client, AsyncAnthropic, AsyncGroq, ElevenLabs]
+ProviderClient: TypeAlias = Union[AsyncOpenAI, genai.Client, AsyncAnthropic, AsyncGroq, AsyncElevenLabs]
 
 
 class ConfigManager:
@@ -64,6 +64,6 @@ class ConfigManager:
         elif settings.provider == ProviderKind.GROQ:
             return AsyncGroq(api_key=settings.api_key, base_url=settings.base_url)
         elif settings.provider == ProviderKind.ELEVENLABS:
-            return ElevenLabs(api_key=settings.api_key, base_url=settings.base_url)
+            return AsyncElevenLabs(api_key=settings.api_key, base_url=settings.base_url)
         else:
             raise ValueError(f"Provider {settings.provider} not supported")

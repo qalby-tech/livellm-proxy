@@ -9,57 +9,39 @@ from typing import Optional, Tuple, AsyncIterator
 import logfire
 
 class OpenAIAudioAIService(AudioAIService):
+    default_output_format = "pcm"
+
     def __init__(self, client: AsyncOpenAI):
         self.client = client
     
-    def decode_output_format(self, output_format: str) -> Tuple[str, int]:
-        """
-        openai output matched with mime_type, + sample rate is always 24_000
-        """
-        mime_type = self.mime_type_map.get(output_format, None)
-        if mime_type:
-            return mime_type, 24000
-        else:
-            raise ValueError(f"Unsupported output format: {output_format}")
+
+    @property
+    def default_sample_rate(self) -> int:
+        return 24000
     
-    @logfire.instrument(span_name="OpenAI Speak", record_return=True)
-    async def speak(self, request: SpeakRequest) -> SpeakResponse:
-        config = request.gen_config or {}
-        mime_type, sample_rate = self.decode_output_format(request.output_format)
+
+    async def text2speech(self, model: str, text: str, voice: str, gen_config: Optional[dict] = None) -> bytes:
+        config = gen_config or {}
         speech: HttpxBinaryResponseContent = await self.client.audio.speech.create(
-            model=request.model,
-            input=request.text,
-            voice=request.voice,
-            response_format=request.output_format,
+            model=model,
+            input=text,
+            voice=voice,
+            response_format=self.default_output_format,
             **config
         )
-        return SpeakResponse(audio=speech.content, content_type=mime_type, sample_rate=sample_rate)
+        return speech.content
     
-    
-    @logfire.instrument(span_name="OpenAI Stream Speak", record_return=True)
-    async def stream_speak(self, request: SpeakRequest) -> SpeakStreamResponse:
-        config = request.gen_config or {}
-        mime_type, sample_rate = self.decode_output_format(request.output_format)
-        
-        async def _openai_stream_speech_generator() -> AsyncIterator[bytes]:
-            async with self.client.audio.speech.with_streaming_response.create(
-                model=request.model,
-                input=request.text,
-                voice=request.voice,
-                response_format=request.output_format,
-                **config
-            ) as stream_response:
-                async for chunk in stream_response.iter_bytes():
-                    yield chunk
-        
-        generator = _openai_stream_speech_generator()
-        first_chunk = await generator.__anext__()
-        async def _generator(first_chunk: bytes, generator: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
-            yield first_chunk
-            async for chunk in generator:
+    async def stream_text2speech(self, model: str, text: str, voice: str, gen_config: Optional[dict] = None) -> AsyncIterator[bytes]:
+        config = gen_config or {}
+        async with self.client.audio.speech.with_streaming_response.create(
+            model=model,
+            input=text,
+            voice=voice,
+            response_format=self.default_output_format,
+            **config
+        ) as stream_response:
+            async for chunk in stream_response.iter_bytes():
                 yield chunk
-
-        return _generator(first_chunk, generator), mime_type, sample_rate
     
     @logfire.instrument(span_name="OpenAI Transcribe", record_return=True)
     async def transcribe(self, request: TranscribeRequest) -> TranscribeResponse:

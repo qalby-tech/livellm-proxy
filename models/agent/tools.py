@@ -14,6 +14,7 @@ class Tool(BaseModel):
 
 class ToolInput(BaseModel):
     kind: ToolKind
+    kwargs: dict = Field(default_factory=dict, description="Additional keyword arguments for the MCP server")
 
 class WebSearchInput(ToolInput):
     kind: ToolKind = Field(ToolKind.WEB_SEARCH, description="Web search kind of tool")
