@@ -10,7 +10,7 @@ class ChunkCollector:
         self.sample_rate = sample_rate
         self.chunk_size_ms = chunk_size_ms
         # Calculate exact bytes needed for chunk_size_ms
-        # For PCM16: 2 bytes per sample
+        # For PCM16: 2 bytes per sample (16-bit audio)
         self.bytes_per_chunk = int((self.chunk_size_ms / 1000.0) * self.sample_rate * 2)
         self.audio_buffer = b""
     
