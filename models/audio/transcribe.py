@@ -1,9 +1,10 @@
 from pydantic import BaseModel, Field
 from typing import Tuple, TypeAlias, Optional
+from models.common import BaseRequest
 
 File: TypeAlias = Tuple[str, bytes, str] # (filename, file_content, content_type)
 
-class TranscribeRequest(BaseModel):
+class TranscribeRequest(BaseRequest):
     model: str = Field(..., description="The model to use")
     file: File = Field(..., description="The file to transcribe")
     language: Optional[str] = Field(default=None, description="The language to transcribe")

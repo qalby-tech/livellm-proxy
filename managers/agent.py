@@ -175,7 +175,6 @@ class AgentManager:
     
     async def run(
         self,
-        uid: str,
         payload: AgentRequest,
         stream: bool = False
     ) -> Union[AsyncIterator[AgentResponse], AgentResponse]:
@@ -196,7 +195,7 @@ class AgentManager:
         
         # Create the model using the cached provider
         model = self.create_model(
-            uid=uid,
+            uid=payload.provider_uid,
             model=payload.model,
             gen_config=payload.gen_config
         )

@@ -5,6 +5,11 @@ from enum import Enum
 from typing import Optional
 
 
+class BaseRequest(BaseModel):
+    """Base request model that all service requests inherit from"""
+    provider_uid: str = Field(..., description="The unique identifier of the provider configuration to use")
+
+
 class ProviderKind(Enum):
     """Unified provider types for both agent and audio services"""
     # Agent providers

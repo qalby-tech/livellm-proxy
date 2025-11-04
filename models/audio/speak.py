@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, TypeAlias, Tuple, AsyncIterator
 from enum import Enum
+from models.common import BaseRequest
 
 SpeakStreamResponse: TypeAlias = Tuple[AsyncIterator[bytes], str, int]
 
@@ -12,7 +13,7 @@ class SpeakMimeType(Enum):
     ULAW = "audio/ulaw"
     ALAW = "audio/alaw"
 
-class SpeakRequest(BaseModel):
+class SpeakRequest(BaseRequest):
     model: str = Field(..., description="The model to use")
     text: str = Field(..., description="The text to speak")
     voice: str = Field(..., description="The voice to use")

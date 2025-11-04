@@ -4,9 +4,10 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Union
 from models.agent.chat import TextMessage, BinaryMessage
 from models.agent.tools import WebSearchInput, MCPStreamableServerInput
+from models.common import BaseRequest
 
 
-class AgentRequest(BaseModel):
+class AgentRequest(BaseRequest):
     model: str = Field(..., description="The model to use")
     messages: List[Union[TextMessage, BinaryMessage]]
     tools: List[Union[WebSearchInput, MCPStreamableServerInput]]

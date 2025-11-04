@@ -44,6 +44,7 @@ def client(mock_agent_manager, mock_audio_manager):
 def agent_request_payload():
     """Sample agent request payload."""
     return {
+        "provider_uid": "test-provider-uid",
         "model": "gpt-4",
         "messages": [
             {
@@ -57,28 +58,24 @@ def agent_request_payload():
 
 @pytest.fixture
 def agent_headers():
-    """Sample agent request headers."""
-    return {
-        "X-Api-Key": "test-api-key",
-        "X-Provider": "openai"
-    }
+    """Sample agent request headers (deprecated - provider_uid now in body)."""
+    return {}
 
 
 @pytest.fixture
 def audio_speak_payload():
     """Sample audio speak request payload."""
     return {
+        "provider_uid": "test-provider-uid",
         "model": "tts-1",
         "text": "Hello world",
         "voice": "alloy",
-        "output_format": "mp3"
+        "mime_type": "audio/mpeg",
+        "sample_rate": 24000
     }
 
 
 @pytest.fixture
 def audio_headers():
-    """Sample audio request headers."""
-    return {
-        "X-Api-Key": "test-api-key",
-        "X-Provider": "openai"
-    }
+    """Sample audio request headers (deprecated - provider_uid now in body)."""
+    return {}

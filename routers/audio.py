@@ -1,11 +1,10 @@
-from fastapi import APIRouter, Depends, Request, Response, Form, UploadFile, File, Header
+from fastapi import APIRouter, Depends, Request, Response, Form, UploadFile, File
 from fastapi.responses import StreamingResponse
 from fastapi.exceptions import HTTPException
-from typing import Annotated, Optional, AsyncIterator
+from typing import Annotated, Optional
 import json
 import logfire
 from managers.audio import AudioManager
-from models.common import Settings, ProviderKind
 from models.audio.speak import SpeakRequest, SpeakResponse
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse
 
@@ -23,19 +22,15 @@ AudioManagerType = Annotated[AudioManager, Depends(get_audio_manager)]
 async def audio_speak(
     payload: SpeakRequest,
     audio_manager: AudioManagerType,
-    x_provider_uid: str = Header(..., alias="X-Provider-UID", description="Provider UID configured via POST /config"),
 ) -> Response:
     """
     Convert text to speech using the specified audio provider.
     Returns raw audio bytes with appropriate content type.
     
     The provider UID must be configured first using POST /config endpoint.
-    
-    Headers:
-        X-Provider-UID: The unique identifier of the provider configuration to use
     """
     try:
-        result: SpeakResponse = await audio_manager.speak(x_provider_uid, payload, stream=False)
+        result: SpeakResponse = await audio_manager.speak(payload.provider_uid, payload, stream=False)
         return Response(
             content=result.audio,
             media_type=result.content_type,
@@ -54,19 +49,15 @@ async def audio_speak(
 async def audio_speak_stream(
     payload: SpeakRequest,
     audio_manager: AudioManagerType,
-    x_provider_uid: str = Header(..., alias="X-Provider-UID", description="Provider UID configured via POST /config"),
 ) -> Response:
     """
     Convert text to speech using the specified audio provider.
     Returns streaming audio bytes with appropriate content type.
     
     The provider UID must be configured first using POST /config endpoint.
-    
-    Headers:
-        X-Provider-UID: The unique identifier of the provider configuration to use
     """
     try:
-        generator, mime_type, sample_rate = await audio_manager.speak(x_provider_uid, payload, stream=True)
+        generator, mime_type, sample_rate = await audio_manager.speak(payload, stream=True)
         return StreamingResponse(
             generator,
             media_type=mime_type,
@@ -83,7 +74,7 @@ async def audio_speak_stream(
 @audio_router.post("/transcribe")
 async def audio_transcribe(
     audio_manager: AudioManagerType,
-    x_provider_uid: str = Header(..., alias="X-Provider-UID", description="Provider UID configured via POST /config"),
+    provider_uid: str = Form(...),
     model: str = Form(...),
     file: UploadFile = File(...),
     language: Optional[str] = Form(None),
@@ -94,9 +85,6 @@ async def audio_transcribe(
     Returns the transcribed text, language, and usage information.
     
     The provider UID must be configured first using POST /config endpoint.
-    
-    Headers:
-        X-Provider-UID: The unique identifier of the provider configuration to use
     """
     try:
         # Validate content type
@@ -117,6 +105,7 @@ async def audio_transcribe(
         
         # Create TranscribeRequest
         transcribe_request = TranscribeRequest(
+            provider_uid=provider_uid,
             model=model,
             file=file_tuple,
             language=language,
@@ -124,7 +113,7 @@ async def audio_transcribe(
         )
         
         # Call the transcribe method on the manager
-        result: TranscribeResponse = await audio_manager.transcribe(x_provider_uid, transcribe_request)
+        result: TranscribeResponse = await audio_manager.transcribe(transcribe_request)
         return result
     
     except ValueError as e:

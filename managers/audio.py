@@ -39,7 +39,6 @@ class AudioManager:
     
     async def speak(
         self, 
-        uid: str,
         payload: SpeakRequest, 
         stream: bool = False
     ) -> Union[SpeakResponse, SpeakStreamResponse]:
@@ -57,7 +56,7 @@ class AudioManager:
         """
         # Create the service using the cached provider
         service = self.create_service(
-            uid=uid,
+            uid=payload.provider_uid,
             model=payload.model
         )
         
@@ -69,7 +68,6 @@ class AudioManager:
     
     async def transcribe(
         self, 
-        uid: str,
         payload: TranscribeRequest
     ) -> TranscribeResponse:
         """
@@ -84,7 +82,7 @@ class AudioManager:
         """
         # Create the service using the cached provider
         service = self.create_service(
-            uid=uid,
+            uid=payload.provider_uid,
             model=payload.model
         )
         
