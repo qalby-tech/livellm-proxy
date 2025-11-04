@@ -33,18 +33,20 @@ HOST=0.0.0.0 PORT=8000 python main.py
 
 ## API Endpoints
 
+**Note:** All endpoints are prefixed with `/livellm`. For example: `/livellm/providers/configs`
+
 ### Provider Configuration Management
 
 #### Get All Provider Configurations
 ```http
-GET /providers/configs
+GET /livellm/providers/configs
 ```
 
 Returns a list of all provider configurations with masked API keys.
 
 #### Add Provider Configuration
 ```http
-POST /providers/config
+POST /livellm/providers/config
 Content-Type: application/json
 
 {
@@ -57,14 +59,14 @@ Content-Type: application/json
 
 #### Delete Provider Configuration
 ```http
-DELETE /providers/config/{uid}
+DELETE /livellm/providers/config/{uid}
 ```
 
 ### Agent Endpoints
 
 #### Run Agent (Non-Streaming)
 ```http
-POST /agent/run
+POST /livellm/agent/run
 Content-Type: application/json
 ```
 
@@ -118,17 +120,17 @@ Content-Type: application/json
 
 #### Run Agent (Streaming)
 ```http
-POST /agent/run_stream
+POST /livellm/agent/run_stream
 Content-Type: application/json
 ```
 
-Accepts the same payload formats as `/agent/run` but returns NDJSON stream.
+Accepts the same payload formats as `/livellm/agent/run` but returns NDJSON stream.
 
 ### Audio Endpoints
 
 #### Text-to-Speech (Non-Streaming)
 ```http
-POST /audio/speak
+POST /livellm/audio/speak
 Content-Type: application/json
 ```
 
@@ -167,15 +169,15 @@ Content-Type: application/json
 
 #### Text-to-Speech (Streaming)
 ```http
-POST /audio/speak_stream
+POST /livellm/audio/speak_stream
 Content-Type: application/json
 ```
 
-Accepts the same payload formats as `/audio/speak` but returns streaming audio.
+Accepts the same payload formats as `/livellm/audio/speak` but returns streaming audio.
 
 #### Speech-to-Text (Form-based)
 ```http
-POST /audio/transcribe
+POST /livellm/audio/transcribe
 Content-Type: multipart/form-data
 
 provider_uid: openai-1
@@ -189,7 +191,7 @@ gen_config: {"temperature": 0} (optional)
 
 #### Speech-to-Text (JSON-based)
 ```http
-POST /audio/transcribe_json
+POST /livellm/audio/transcribe_json
 Content-Type: application/json
 ```
 
@@ -330,12 +332,12 @@ OTEL_EXPORTER_OTLP_ENDPOINT=your-endpoint
 
 ```
 ┌─────────────────────────────────────────────┐
-│              FastAPI App                     │
+│          FastAPI App (/livellm)             │
 ├─────────────────────────────────────────────┤
 │  Routers                                     │
-│  ├── Providers Router (/providers/*)        │
-│  ├── Agent Router (/agent/*)                │
-│  └── Audio Router (/audio/*)                │
+│  ├── Providers Router (/livellm/providers/*)│
+│  ├── Agent Router (/livellm/agent/*)        │
+│  └── Audio Router (/livellm/audio/*)        │
 ├─────────────────────────────────────────────┤
 │  Managers                                    │
 │  ├── ConfigManager (Provider configs)       │

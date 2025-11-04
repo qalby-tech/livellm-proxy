@@ -18,10 +18,10 @@ import logfire
 
 class EnvSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-    logfire_write_token: Optional[str] = Field(None, env="LOGFIRE_WRITE_TOKEN")
-    otel_exporter_otlp_endpoint: Optional[str] = Field(None, env="OTEL_EXPORTER_OTLP_ENDPOINT")
-    host: str = Field("0.0.0.0", env="HOST")
-    port: int = Field(8000, env="PORT")
+    logfire_write_token: Optional[str] = Field(None, description="Logfire write token")
+    otel_exporter_otlp_endpoint: Optional[str] = Field(None, description="OTEL exporter otlp endpoint")
+    host: str = Field("0.0.0.0", description="Host")
+    port: int = Field(8000, description="Port")
 
 env_settings = EnvSettings()
 
@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan, root_path="/livellm")
 app.include_router(agent_router)
 app.include_router(audio_router)
 app.include_router(providers_router)
