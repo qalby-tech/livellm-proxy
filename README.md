@@ -33,11 +33,18 @@ HOST=0.0.0.0 PORT=8000 python main.py
 
 ## API Endpoints
 
-### Configuration Management
+### Provider Configuration Management
+
+#### Get All Provider Configurations
+```http
+GET /providers/configs
+```
+
+Returns a list of all provider configurations with masked API keys.
 
 #### Add Provider Configuration
 ```http
-POST /config
+POST /providers/config
 Content-Type: application/json
 
 {
@@ -50,7 +57,7 @@ Content-Type: application/json
 
 #### Delete Provider Configuration
 ```http
-DELETE /config/{uid}
+DELETE /providers/config/{uid}
 ```
 
 ### Agent Endpoints
@@ -326,6 +333,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=your-endpoint
 │              FastAPI App                     │
 ├─────────────────────────────────────────────┤
 │  Routers                                     │
+│  ├── Providers Router (/providers/*)        │
 │  ├── Agent Router (/agent/*)                │
 │  └── Audio Router (/audio/*)                │
 ├─────────────────────────────────────────────┤

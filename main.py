@@ -1,7 +1,6 @@
 import os
-from fastapi import FastAPI, Request, Depends
-from fastapi.exceptions import HTTPException
-from typing import Annotated
+from fastapi import FastAPI
+from typing import Optional
 from contextlib import asynccontextmanager
 from managers.agent import AgentManager
 from managers.audio import AudioManager
@@ -9,9 +8,22 @@ from managers.config import ConfigManager
 from managers.fallback import FallbackManager
 from routers.agent import agent_router
 from routers.audio import audio_router
-from models.common import Settings, SuccessResponse
+from routers.providers import providers_router
+from models.common import SuccessResponse
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 import logfire
+
+
+class EnvSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    logfire_write_token: Optional[str] = Field(None, env="LOGFIRE_WRITE_TOKEN")
+    otel_exporter_otlp_endpoint: Optional[str] = Field(None, env="OTEL_EXPORTER_OTLP_ENDPOINT")
+    host: str = Field("0.0.0.0", env="HOST")
+    port: int = Field(8000, env="PORT")
+
+env_settings = EnvSettings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -31,48 +43,20 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.include_router(agent_router)
 app.include_router(audio_router)
+app.include_router(providers_router)
 
 # configure logfire
-logfire_token = os.getenv('LOGFIRE_WRITE_TOKEN', None)
-otel_exporter = os.getenv('OTEL_EXPORTER_OTLP_ENDPOINT')
-logfire.configure(service_name="livellm-proxy", send_to_logfire="if-token-present", token=logfire_token)
+os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = env_settings.otel_exporter_otlp_endpoint or ""
+logfire.configure(service_name="livellm-proxy", send_to_logfire="if-token-present", token=env_settings.logfire_write_token)
 logfire.instrument_pydantic_ai()
 logfire.instrument_mcp()
 logfire.instrument_fastapi(app, capture_headers=True, excluded_urls=["/ping"])
 
 
-def get_config_manager(request: Request) -> ConfigManager:
-    return request.app.state.config_manager
-
-ConfigManagerType = Annotated[ConfigManager, Depends(get_config_manager)]
-
 @app.get("/ping")
 async def ping():
     return SuccessResponse()
 
-
-@app.post("/config", status_code=201)
-async def config(request: Settings, config_manager: ConfigManagerType) -> SuccessResponse:
-    try:
-        config_manager.add_config(request)
-        return SuccessResponse()
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.delete("/config/{uid}")
-async def delete_config(uid: str, config_manager: ConfigManagerType) -> SuccessResponse:
-    """
-    Delete a provider configuration by uid.
-    
-    Args:
-        uid: The unique identifier of the provider configuration to delete
-    """
-    try:
-        config_manager.delete_config(uid)
-        return SuccessResponse()
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host=os.getenv("HOST", "0.0.0.0"), port=int(os.getenv("PORT", 8000)))
+    uvicorn.run(app, host=env_settings.host, port=env_settings.port)
