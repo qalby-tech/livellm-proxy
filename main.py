@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from managers.agent import AgentManager
 from managers.audio import AudioManager
 from managers.config import ConfigManager
+from managers.fallback import FallbackManager
 from routers.agent import agent_router
 from routers.audio import audio_router
 from models.common import Settings, SuccessResponse
@@ -15,8 +16,15 @@ import logfire
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.config_manager = ConfigManager()
-    app.state.agent_manager = AgentManager(config_manager=app.state.config_manager)
-    app.state.audio_manager = AudioManager(config_manager=app.state.config_manager)
+    app.state.fallback_manager = FallbackManager()
+    app.state.agent_manager = AgentManager(
+        config_manager=app.state.config_manager, 
+        fallback_manager=app.state.fallback_manager
+    )
+    app.state.audio_manager = AudioManager(
+        config_manager=app.state.config_manager,
+        fallback_manager=app.state.fallback_manager
+    )
     yield
 
 
@@ -43,7 +51,7 @@ async def ping():
     return SuccessResponse()
 
 
-@app.post("/config")
+@app.post("/config", status_code=201)
 async def config(request: Settings, config_manager: ConfigManagerType) -> SuccessResponse:
     try:
         config_manager.add_config(request)

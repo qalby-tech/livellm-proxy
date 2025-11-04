@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, Request, Response, Form, UploadFile, File
 from fastapi.responses import StreamingResponse
 from fastapi.exceptions import HTTPException
-from typing import Annotated, Optional
+from typing import Annotated, Optional, Union
 import json
 import logfire
 from managers.audio import AudioManager
 from models.audio.speak import SpeakRequest, SpeakResponse
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse
+from models.fallback import AudioFallbackRequest, TranscribeFallbackRequest
 
 audio_router = APIRouter(prefix="/audio", tags=["audio"])
 
@@ -20,17 +21,21 @@ AudioManagerType = Annotated[AudioManager, Depends(get_audio_manager)]
 
 @audio_router.post("/speak", response_class=Response)
 async def audio_speak(
-    payload: SpeakRequest,
+    payload: Union[SpeakRequest, AudioFallbackRequest],
     audio_manager: AudioManagerType,
 ) -> Response:
     """
     Convert text to speech using the specified audio provider.
     Returns raw audio bytes with appropriate content type.
+    Supports both single requests and fallback requests with multiple providers.
+    
+    For single request: provide SpeakRequest
+    For fallback: provide AudioFallbackRequest with list of requests and strategy
     
     The provider UID must be configured first using POST /config endpoint.
     """
     try:
-        result: SpeakResponse = await audio_manager.speak(payload.provider_uid, payload, stream=False)
+        result: SpeakResponse = await audio_manager.safe_speak(payload, stream=False)
         return Response(
             content=result.audio,
             media_type=result.content_type,
@@ -47,17 +52,21 @@ async def audio_speak(
 
 @audio_router.post("/speak_stream", response_class=Response)
 async def audio_speak_stream(
-    payload: SpeakRequest,
+    payload: Union[SpeakRequest, AudioFallbackRequest],
     audio_manager: AudioManagerType,
 ) -> Response:
     """
     Convert text to speech using the specified audio provider.
     Returns streaming audio bytes with appropriate content type.
+    Supports both single requests and fallback requests with multiple providers.
+    
+    For single request: provide SpeakRequest
+    For fallback: provide AudioFallbackRequest with list of requests and strategy
     
     The provider UID must be configured first using POST /config endpoint.
     """
     try:
-        generator, mime_type, sample_rate = await audio_manager.speak(payload, stream=True)
+        generator, mime_type, sample_rate = await audio_manager.safe_speak(payload, stream=True)
         return StreamingResponse(
             generator,
             media_type=mime_type,
@@ -83,6 +92,9 @@ async def audio_transcribe(
     """
     Transcribe audio to text using the specified audio provider.
     Returns the transcribed text, language, and usage information.
+    
+    Note: This endpoint uses form data and supports single requests only.
+    For fallback support with transcription, use the JSON-based endpoint /transcribe_json.
     
     The provider UID must be configured first using POST /config endpoint.
     """
@@ -112,8 +124,8 @@ async def audio_transcribe(
             gen_config=parsed_gen_config
         )
         
-        # Call the transcribe method on the manager
-        result: TranscribeResponse = await audio_manager.transcribe(transcribe_request)
+        # Call the safe_transcribe method on the manager
+        result: TranscribeResponse = await audio_manager.safe_transcribe(transcribe_request)
         return result
     
     except ValueError as e:
@@ -125,3 +137,33 @@ async def audio_transcribe(
         raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         await file.close()
+
+@audio_router.post("/transcribe_json")
+async def audio_transcribe_json(
+    payload: Union[TranscribeRequest, TranscribeFallbackRequest],
+    audio_manager: AudioManagerType,
+) -> TranscribeResponse:
+    """
+    Transcribe audio to text using the specified audio provider (JSON-based).
+    Returns the transcribed text, language, and usage information.
+    Supports both single requests and fallback requests with multiple providers.
+    
+    For single request: provide TranscribeRequest with base64-encoded audio
+    For fallback: provide TranscribeFallbackRequest with list of requests and strategy
+    
+    The provider UID must be configured first using POST /config endpoint.
+    
+    Audio file format:
+    - Use a tuple/list: [filename, base64_encoded_content, mime_type]
+    - Example: ["audio.mp3", "SGVsbG8gd29ybGQh...", "audio/mpeg"]
+    - The base64 content will be automatically decoded by the validator
+    """
+    try:
+        result: TranscribeResponse = await audio_manager.safe_transcribe(payload)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logfire.error(f"Unexpected error in audio_transcribe_json: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+

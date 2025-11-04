@@ -10,8 +10,8 @@ class AudioAIService(ABC):
 
     pcm_mime_type = SpeakMimeType.PCM.value
 
-    @abstractmethod
     @property
+    @abstractmethod
     def default_sample_rate(self) -> int:
         return 24000
     

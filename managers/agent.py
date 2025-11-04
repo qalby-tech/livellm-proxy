@@ -21,16 +21,19 @@ from pydantic_ai.models.groq import GroqModel
 from models.common import ProviderKind
 from models.agent.tools import WebSearchInput, MCPStreamableServerInput, ToolKind, ToolInput
 from models.agent.chat import MessageRole, TextMessage, BinaryMessage
-from models.agent.run import AgentRequest, AgentResponse, AgentResponseUsage
-from managers.config import ConfigManager, ProviderClient
+from models.agent.agent import AgentRequest, AgentResponse, AgentResponseUsage
+from models.fallback import AgentFallbackRequest
+from managers.config import ConfigManager
+from managers.fallback import FallbackManager
 import base64
 
 
 class AgentManager:
     
 
-    def __init__(self, config_manager: ConfigManager):
+    def __init__(self, config_manager: ConfigManager, fallback_manager: Optional[FallbackManager] = None):
         self.config_manager = config_manager
+        self.fallback_manager = fallback_manager
         self.agent = Agent[None, str]()
         
     def create_model(self, uid: str, model: str, gen_config: Optional[dict] = None):
@@ -238,6 +241,40 @@ class AgentManager:
                         input_tokens=usage.input_tokens,
                         output_tokens=usage.output_tokens,
                     ))
+
+    async def safe_run(
+        self,
+        payload: Union[AgentRequest, AgentFallbackRequest],
+        stream: bool = False
+    ) -> Union[AsyncIterator[AgentResponse], AgentResponse]:
+        """
+        Run agent with optional fallback support.
+        
+        If payload is AgentRequest: runs normally
+        If payload is AgentFallbackRequest: uses fallback manager to try multiple requests
+        
+        Args:
+            payload: Either AgentRequest or AgentFallbackRequest
+            stream: If True, returns an async generator for streaming responses
+            
+        Returns:
+            If stream=False: AgentResponse with the complete output and usage
+            If stream=True: AsyncIterator[AgentResponse] that yields chunks as they arrive
+        """
+        # If it's a simple request, run normally
+        if isinstance(payload, AgentRequest):
+            return await self.run(payload, stream=stream)
+        
+        # If it's a fallback request, use the fallback manager
+        if not self.fallback_manager:
+            raise ValueError("FallbackManager not configured. Cannot use fallback requests.")
+        
+        # Define the executor function for the fallback manager
+        async def executor(request: AgentRequest) -> Union[AsyncIterator[AgentResponse], AgentResponse]:
+            return await self.run(request, stream=stream)
+        
+        # Use the fallback manager's catch method
+        return await self.fallback_manager.catch(payload, executor)
 
 
     

@@ -1,20 +1,23 @@
-from typing import Dict, Union, Optional, Tuple
+from typing import Union, Tuple, Optional
 from audio_ai.base import AudioAIService
 from audio_ai.openai import OpenAIAudioAIService
 from audio_ai.elevenlabs import ElevenLabsAudioAIService
 
 # pydantic models
-from models.common import Settings, ProviderKind
+from models.common import ProviderKind
 from models.audio.speak import SpeakRequest, SpeakResponse, SpeakStreamResponse
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse
+from models.fallback import AudioFallbackRequest, TranscribeFallbackRequest
 
 # managers
 from managers.config import ConfigManager, ProviderClient
+from managers.fallback import FallbackManager
 
 class AudioManager:
     
-    def __init__(self, config_manager: ConfigManager):
+    def __init__(self, config_manager: ConfigManager, fallback_manager: Optional[FallbackManager] = None):
         self.config_manager = config_manager
+        self.fallback_manager = fallback_manager
 
     
     def create_service(
@@ -25,7 +28,7 @@ class AudioManager:
         """
         Create an audio service using the cached provider
         """        
-        provider_kind, provider_client: Tuple[ProviderKind, ProviderClient] = self.config_manager.get_provider(uid, model)
+        provider_kind, provider_client = self.config_manager.get_provider(uid, model)
         # Create new service based on type
         service: AudioAIService
         if provider_kind == ProviderKind.OPENAI:
@@ -88,3 +91,68 @@ class AudioManager:
         
         # Call the transcribe method on the service
         return await service.transcribe(payload)
+    
+    async def safe_speak(
+        self,
+        payload: Union[SpeakRequest, AudioFallbackRequest],
+        stream: bool = False
+    ) -> Union[SpeakResponse, SpeakStreamResponse]:
+        """
+        Convert text to speech with optional fallback support.
+        
+        If payload is SpeakRequest: runs normally
+        If payload is AudioFallbackRequest: uses fallback manager to try multiple requests
+        
+        Args:
+            payload: Either SpeakRequest or AudioFallbackRequest
+            stream: If True, returns SpeakStreamResponse. If False, returns SpeakResponse
+            
+        Returns:
+            If stream=False: SpeakResponse containing audio data, content type, and sample rate
+            If stream=True: SpeakStreamResponse (tuple of AsyncIterator[bytes], mime_type, sample_rate)
+        """
+        # If it's a simple request, run normally
+        if isinstance(payload, SpeakRequest):
+            return await self.speak(payload, stream=stream)
+        
+        # If it's a fallback request, use the fallback manager
+        if not self.fallback_manager:
+            raise ValueError("FallbackManager not configured. Cannot use fallback requests.")
+        
+        # Define the executor function for the fallback manager
+        async def executor(request: SpeakRequest) -> Union[SpeakResponse, SpeakStreamResponse]:
+            return await self.speak(request, stream=stream)
+        
+        # Use the fallback manager's catch method
+        return await self.fallback_manager.catch(payload, executor)
+    
+    async def safe_transcribe(
+        self,
+        payload: Union[TranscribeRequest, TranscribeFallbackRequest]
+    ) -> TranscribeResponse:
+        """
+        Transcribe audio to text with optional fallback support.
+        
+        If payload is TranscribeRequest: runs normally
+        If payload is TranscribeFallbackRequest: uses fallback manager to try multiple requests
+        
+        Args:
+            payload: Either TranscribeRequest or TranscribeFallbackRequest
+            
+        Returns:
+            TranscribeResponse containing transcribed text, detected language, and usage
+        """
+        # If it's a simple request, run normally
+        if isinstance(payload, TranscribeRequest):
+            return await self.transcribe(payload)
+        
+        # If it's a fallback request, use the fallback manager
+        if not self.fallback_manager:
+            raise ValueError("FallbackManager not configured. Cannot use fallback requests.")
+        
+        # Define the executor function for the fallback manager
+        async def executor(request: TranscribeRequest) -> TranscribeResponse:
+            return await self.transcribe(request)
+        
+        # Use the fallback manager's catch method
+        return await self.fallback_manager.catch(payload, executor)

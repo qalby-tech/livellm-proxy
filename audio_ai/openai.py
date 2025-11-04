@@ -2,10 +2,8 @@ from openai import AsyncOpenAI
 from openai import HttpxBinaryResponseContent
 from openai.types.audio import Transcription
 from audio_ai.base import AudioAIService
-from models.common import Settings
-from models.audio.speak import SpeakRequest, SpeakResponse, SpeakStreamResponse
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse
-from typing import Optional, Tuple, AsyncIterator
+from typing import Optional, AsyncIterator
 import logfire
 
 class OpenAIAudioAIService(AudioAIService):
