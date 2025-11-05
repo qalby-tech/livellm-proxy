@@ -13,7 +13,7 @@ class FallbackStrategy(Enum):
 class FallbackRequest(BaseModel):
     requests: List[BaseRequest] = Field(..., description="List of requests to try as fallbacks")
     strategy: FallbackStrategy = Field(FallbackStrategy.SEQUENTIAL, description="The strategy to use for fallback")
-    timeout_per_request: int = Field(default=360, description="The timeout to use for each request")
+    timeout_per_request: int = Field(default=360, description="The timeout to use for each request in seconds")
 
 class AgentFallbackRequest(FallbackRequest):
     requests: List[AgentRequest] = Field(..., description="List of agent requests to try as fallbacks")

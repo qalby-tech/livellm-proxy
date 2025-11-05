@@ -37,7 +37,7 @@ class AudioAIService(ABC):
         Returns a tuple of (async iterator of bytes, mime type, sample rate)
         Processing pipeline: native audio -> resample -> chunk to fixed sizes -> encode
         """
-        generator = await self.stream_text2speech(request.model, request.text, request.voice, request.gen_config)
+        generator = self.stream_text2speech(request.model, request.text, request.voice, request.gen_config)
         
         # Handle empty generator case
         try:
