@@ -13,10 +13,13 @@ from pydantic_ai.messages import UserPromptPart, TextPart, SystemPromptPart
 from pydantic_ai import ModelSettings
 from pydantic_ai.models import Model
 from pydantic_ai.models.openai import OpenAIResponsesModel
+from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.models.google import GoogleModel
+from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.models.groq import GroqModel
-
+from pydantic_ai.providers.groq import GroqProvider
 # pydantic models
 from models.common import ProviderKind
 from models.agent.tools import WebSearchInput, MCPStreamableServerInput, ToolKind, ToolInput
@@ -45,12 +48,16 @@ class AgentManager:
 
         model_base: Model
         if provider_kind == ProviderKind.OPENAI:
+            provider_client = OpenAIProvider(openai_client=provider_client)
             model_base = OpenAIResponsesModel
         elif provider_kind == ProviderKind.GOOGLE:
+            provider_client = GoogleProvider(client=provider_client)
             model_base = GoogleModel
         elif provider_kind == ProviderKind.ANTHROPIC:
+            provider_client = AnthropicProvider(anthropic_client=provider_client)
             model_base = AnthropicModel
         elif provider_kind == ProviderKind.GROQ:
+            provider_client = GroqProvider(groq_client=provider_client)
             model_base = GroqModel
         else:
             raise ValueError(f"Provider {provider_kind} not supported")
