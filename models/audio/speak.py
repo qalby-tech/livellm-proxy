@@ -2,11 +2,12 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Optional, TypeAlias, Tuple, AsyncIterator
 from enum import Enum
 from models.common import BaseRequest
+import base64
 
 SpeakStreamResponse: TypeAlias = Tuple[AsyncIterator[bytes], str, int]
 
 
-class SpeakMimeType(Enum):
+class SpeakMimeType(str, Enum):
     PCM = "audio/pcm"
     WAV = "audio/wav"
     MP3 = "audio/mpeg"
@@ -50,3 +51,17 @@ class SpeakResponse(BaseModel):
     audio: bytes = Field(..., description="The audio data")
     content_type: str = Field(..., description="The content type of the audio")
     sample_rate: int = Field(..., description="The sample rate of the output audio")
+
+class EncodedSpeakResponse(BaseModel):
+    audio: bytes | str = Field(..., description="The audio data as a base64 encoded string")
+    content_type: SpeakMimeType = Field(..., description="The content type of the audio")
+    sample_rate: int = Field(..., description="The sample rate of the audio")
+
+    @field_validator('audio', mode='before')
+    @classmethod
+    def validate_audio(cls, v: bytes | str) -> bytes:
+        if isinstance(v, bytes):
+            return base64.b64encode(v).decode('utf-8') # encode to base64 string
+        return v # if string, assume it's already a base64 encoded string
+
+

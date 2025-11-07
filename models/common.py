@@ -10,7 +10,7 @@ class BaseRequest(BaseModel):
     provider_uid: str = Field(..., description="The unique identifier of the provider configuration to use")
 
 
-class ProviderKind(Enum):
+class ProviderKind(str, Enum):
     """Unified provider types for both agent and audio services"""
     # Agent providers
     OPENAI = "openai"

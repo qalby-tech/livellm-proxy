@@ -54,8 +54,11 @@ async def agent_run_stream(
     """
     try:
         agent_stream: AsyncIterator[AgentResponse] = await agent_manager.safe_run(payload, stream=True)
+        async def generator_agent_response(agent_stream: AsyncIterator[AgentResponse]):
+            async for response in agent_stream:
+                yield response.model_dump_json() + "\n"
         return StreamingResponse(
-            agent_stream,
+            generator_agent_response(agent_stream),
             media_type="application/x-ndjson"
         )
     except ValueError as e:

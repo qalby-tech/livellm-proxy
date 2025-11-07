@@ -6,7 +6,7 @@ from models.audio.transcribe import TranscribeRequest
 from models.agent.agent import AgentRequest
 from enum import Enum
 
-class FallbackStrategy(Enum):
+class FallbackStrategy(str, Enum):
     SEQUENTIAL = "sequential"
     PARALLEL = "parallel"
     

@@ -136,7 +136,7 @@ class AgentManager:
                 builtin_tools=builtin_tools,
                 toolsets=mcp_servers
             ) as stream_response:
-                async for text in stream_response.stream_output(debounce_by=0.1):
+                async for text in stream_response.stream_output(debounce_by=None):
                     usage = stream_response.usage()
                     yield AgentResponse(
                         output=text,
@@ -179,9 +179,9 @@ class AgentManager:
         first_chunk = await generator.__anext__()
         
         # If we got here, the stream is working, now yield everything
-        yield first_chunk.model_dump_json() + "\n"
+        yield first_chunk
         async for chunk in generator:
-            yield chunk.model_dump_json() + "\n"
+            yield chunk
     
     async def run(
         self,

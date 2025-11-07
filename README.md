@@ -35,6 +35,115 @@ HOST=0.0.0.0 PORT=8000 python main.py
 
 **Note:** All endpoints are prefixed with `/livellm`. For example: `/livellm/providers/configs`
 
+### WebSocket Endpoint
+
+#### Generic WebSocket Connection
+```
+WS /livellm/ws
+```
+
+The WebSocket endpoint provides a unified interface for all AI operations (agent and audio) with support for both streaming and non-streaming responses.
+
+**Connection:**
+```javascript
+const ws = new WebSocket('ws://localhost:8000/livellm/ws');
+```
+
+**Request Format:**
+```json
+{
+  "action": "agent_run",
+  "payload": {
+    // Action-specific payload
+  }
+}
+```
+
+**Response Format:**
+```json
+{
+  "status": "success",  // or "streaming" or "error"
+  "action": "agent_run",
+  "data": {
+    // Response data
+  },
+  "error": null  // Error message if status is "error"
+}
+```
+
+**Available Actions:**
+
+1. **`agent_run`** - Run agent (non-streaming)
+   ```json
+   {
+     "action": "agent_run",
+     "payload": {
+       "provider_uid": "openai-1",
+       "model": "gpt-4",
+       "messages": [{"role": "user", "content": "Hello!"}],
+       "tools": []
+     }
+   }
+   ```
+
+2. **`agent_run_stream`** - Run agent (streaming)
+   - Same payload as `agent_run`
+   - Returns multiple messages with `status: "streaming"` followed by final `status: "success"`
+
+3. **`audio_speak`** - Text-to-Speech (non-streaming)
+   ```json
+   {
+     "action": "audio_speak",
+     "payload": {
+       "provider_uid": "openai-1",
+       "model": "tts-1",
+       "text": "Hello world",
+       "voice": "alloy",
+       "mime_type": "audio/mpeg",
+       "sample_rate": 24000
+     }
+   }
+   ```
+   - Returns base64-encoded audio in `data.audio`
+
+4. **`audio_speak_stream`** - Text-to-Speech (streaming)
+   - Same payload as `audio_speak`
+   - Returns multiple chunks with base64-encoded audio
+
+5. **`audio_transcribe`** - Speech-to-Text
+   ```json
+   {
+     "action": "audio_transcribe",
+     "payload": {
+       "provider_uid": "openai-1",
+       "model": "whisper-1",
+       "file": ["audio.mp3", "<base64-audio>", "audio/mpeg"],
+       "language": "en"
+     }
+   }
+   ```
+
+**Fallback Support:**
+
+All actions support fallback requests through the WebSocket:
+```json
+{
+  "action": "agent_run",
+  "payload": {
+    "requests": [
+      {"provider_uid": "openai-1", "model": "gpt-4", "messages": [...]},
+      {"provider_uid": "anthropic-1", "model": "claude-3-opus", "messages": [...]}
+    ],
+    "strategy": "sequential",
+    "timeout_per_request": 360
+  }
+}
+```
+
+**Example Client:**
+
+See `websocket_client_example.html` for a complete working example.
+
 ### Provider Configuration Management
 
 #### Get All Provider Configurations
@@ -335,11 +444,13 @@ OTEL_EXPORTER_OTLP_ENDPOINT=your-endpoint
 │          FastAPI App (/livellm)             │
 ├─────────────────────────────────────────────┤
 │  Routers                                     │
+│  ├── WebSocket Router (/livellm/ws)         │
 │  ├── Providers Router (/livellm/providers/*)│
 │  ├── Agent Router (/livellm/agent/*)        │
 │  └── Audio Router (/livellm/audio/*)        │
 ├─────────────────────────────────────────────┤
 │  Managers                                    │
+│  ├── WsManager (WebSocket operations)       │
 │  ├── ConfigManager (Provider configs)       │
 │  ├── FallbackManager (Failover logic)       │
 │  ├── AgentManager (LLM operations)          │

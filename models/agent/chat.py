@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field, model_validator
 from enum import Enum
 from typing import Optional
 
-class MessageRole(Enum):
+class MessageRole(str, Enum):
     USER = "user"
     MODEL = "model"
     SYSTEM = "system"

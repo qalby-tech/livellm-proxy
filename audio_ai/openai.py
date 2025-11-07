@@ -18,6 +18,7 @@ class OpenAIAudioAIService(AudioAIService):
         return 24000
     
 
+    @logfire.instrument(span_name="OpenAI Text2Speech", record_return=True)
     async def text2speech(self, model: str, text: str, voice: str, gen_config: Optional[dict] = None) -> bytes:
         config = gen_config or {}
         speech: HttpxBinaryResponseContent = await self.client.audio.speech.create(
@@ -29,6 +30,7 @@ class OpenAIAudioAIService(AudioAIService):
         )
         return speech.content
     
+    @logfire.instrument(span_name="OpenAI Stream Text2Speech", record_return=True)
     async def stream_text2speech(self, model: str, text: str, voice: str, gen_config: Optional[dict] = None) -> AsyncIterator[bytes]:
         config = gen_config or {}
         async with self.client.audio.speech.with_streaming_response.create(

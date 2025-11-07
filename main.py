@@ -6,9 +6,11 @@ from managers.agent import AgentManager
 from managers.audio import AudioManager
 from managers.config import ConfigManager
 from managers.fallback import FallbackManager
+from managers.ws import WsManager
 from routers.agent import agent_router
 from routers.audio import audio_router
 from routers.providers import providers_router
+from routers.ws import ws_router
 from models.common import SuccessResponse
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
@@ -37,6 +39,10 @@ async def lifespan(app: FastAPI):
         config_manager=app.state.config_manager,
         fallback_manager=app.state.fallback_manager
     )
+    app.state.ws_manager = WsManager(
+        agent_manager=app.state.agent_manager,
+        audio_manager=app.state.audio_manager
+    )
     yield
 
 
@@ -44,6 +50,7 @@ app = FastAPI(lifespan=lifespan, root_path="/livellm")
 app.include_router(agent_router)
 app.include_router(audio_router)
 app.include_router(providers_router)
+app.include_router(ws_router)
 
 # configure logfire
 os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = env_settings.otel_exporter_otlp_endpoint or ""

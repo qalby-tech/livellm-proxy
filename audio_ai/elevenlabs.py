@@ -18,6 +18,7 @@ class ElevenLabsAudioAIService(AudioAIService):
     def default_sample_rate(self) -> int:
         return self.sample_rate
 
+    @logfire.instrument(span_name="ElevenLabs Text2Speech", record_return=True)
     async def text2speech(self, model: str, text: str, voice: str, gen_config: Optional[dict] = None) -> bytes:
         config = gen_config or {}
         speech = await self.client.text_to_speech.convert(
@@ -31,6 +32,8 @@ class ElevenLabsAudioAIService(AudioAIService):
         chunks = [chunk for chunk in speech]
         return b"".join(chunks)
     
+    
+    @logfire.instrument(span_name="ElevenLabs Stream Text2Speech", record_return=True)
     async def stream_text2speech(self, model: str, text: str, voice: str, gen_config: Optional[dict] = None) -> AsyncIterator[bytes]:
         config = gen_config or {}
         async for chunk in self.client.text_to_speech.stream(
