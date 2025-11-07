@@ -74,9 +74,11 @@ def test_agent_run_with_tools(client, mock_agent_manager, agent_payload):
 @pytest.mark.agent
 def test_agent_run_stream_endpoint(client, mock_agent_manager, agent_payload):
     """Test agent run stream endpoint returns streaming response."""
+    from models.agent.agent import AgentResponse, AgentResponseUsage
+    
     async def mock_stream():
-        yield b'{"output": "chunk1", "usage": null}\n'
-        yield b'{"output": "chunk2", "usage": {"input_tokens": 10, "output_tokens": 5}}\n'
+        yield AgentResponse(output="chunk1", usage=AgentResponseUsage(input_tokens=10, output_tokens=0))
+        yield AgentResponse(output="chunk2", usage=AgentResponseUsage(input_tokens=10, output_tokens=5))
     
     mock_agent_manager.safe_run.return_value = mock_stream()
     
