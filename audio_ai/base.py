@@ -188,6 +188,7 @@ class AudioRealtimeTranscriptionService(ABC):
             
             # Wait for both tasks
             await asyncio.gather(send_task, receive_task)
+            # await asyncio.wait([send_task, receive_task], return_when=asyncio.FIRST_COMPLETED)
         except asyncio.CancelledError:
             logfire.info("Realtime transcription cancelled")
             # Cancel both tasks if they're still running

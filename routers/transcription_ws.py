@@ -118,7 +118,10 @@ async def transcription_websocket_endpoint(
         """Task that sends transcriptions from queue to client"""
         try:
             while True:
-                transcription = await queue.get()
+                try:
+                    transcription: TranscriptionWsResponse = await asyncio.wait_for(queue.get(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    continue
                 await websocket.send_json(transcription.model_dump())
         except WebSocketDisconnect:
             logfire.info("Client disconnected during transcription send")
@@ -144,7 +147,7 @@ async def transcription_websocket_endpoint(
             audio_source=audio_source(),
             audio_sink=transcription_queue,
             input_audio_format=init_request.input_audio_format,
-            input_sample_rate=init_request.input_sample_rate
+            input_sample_rate=init_request.input_sample_rate,
         ))
         
         # Wait for transcription to complete
