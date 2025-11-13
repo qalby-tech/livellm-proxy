@@ -192,6 +192,16 @@
                     <option value="24000" selected>24000 Hz</option>
                     <option value="48000">48000 Hz</option>
                 </select>
+                <small style="color: #666; font-size: 11px; display: block; margin-top: 5px;">
+                    Note: Browser may use different rate based on hardware. Server will resample if needed.
+                </small>
+            </div>
+            <div class="form-group">
+                <label>Audio Format:</label>
+                <input type="text" id="audioFormat" value="audio/pcm" readonly style="background-color: #f0f0f0; cursor: not-allowed;">
+                <small style="color: #666; font-size: 11px; display: block; margin-top: 5px;">
+                    Note: Only PCM 16-bit is supported by this client. uLaw and aLaw would require additional encoding implementation.
+                </small>
             </div>
         </div>
 
@@ -265,9 +275,11 @@
             const providerUid = document.getElementById('providerUid').value;
             const model = document.getElementById('model').value;
             const language = document.getElementById('language').value;
-            const sampleRate = parseInt(document.getElementById('sampleRate').value);
+            let sampleRate = parseInt(document.getElementById('sampleRate').value);
+            const audioFormat = document.getElementById('audioFormat').value;
 
             log(`Connecting to ${wsUrl}...`);
+            log(`Note: Browser may override requested sample rate (${sampleRate}Hz) based on hardware capabilities`);
             
             try {
                 ws = new WebSocket(wsUrl);
@@ -276,16 +288,19 @@
                     log('WebSocket connected!', 'success');
                     updateStatus('connected', 'Connected');
                     
-                    // Send initialization message
+                    // Send initialization message with REQUESTED sample rate
+                    // Note: Actual audio sample rate will be verified when recording starts
                     const initMessage = {
                         provider_uid: providerUid,
                         model: model,
                         language: language,
                         input_sample_rate: sampleRate,
+                        input_audio_format: audioFormat,
                         gen_config: {}
                     };
                     
-                    log(`Sending init: ${JSON.stringify(initMessage)}`);
+                    log(`Sending init with sample rate: ${sampleRate}Hz`);
+                    log(`⚠️ If browser uses different rate, audio may be resampled on server`, 'info');
                     ws.send(JSON.stringify(initMessage));
                     
                     document.getElementById('connectBtn').disabled = true;
@@ -296,13 +311,15 @@
                     const data = JSON.parse(event.data);
                     log(`Received: ${JSON.stringify(data).substring(0, 100)}...`);
                     
-                    if (data.type === 'initialization_success') {
+                    // Handle WsResponse format
+                    if (data.status === 'success' && data.action === 'transcription_session') {
                         log('Initialization successful!', 'success');
                         document.getElementById('recordBtn').disabled = false;
-                    } else if (data.type === 'initialization_error' || data.type === 'connection_error') {
+                    } else if (data.status === 'error') {
                         log(`Error: ${data.error}`, 'error');
                         updateStatus('disconnected', `Error: ${data.error}`);
                     } else if (data.transcription !== undefined) {
+                        // Direct transcription response
                         addTranscription(data.transcription, data.is_end);
                         if (data.is_end) {
                             log('Transcription completed', 'success');
@@ -367,9 +384,18 @@
                 source.connect(processor);
                 processor.connect(audioContext.destination);
                 
+                // Check actual sample rate (browser may override our request)
+                const actualSampleRate = audioContext.sampleRate;
+                if (actualSampleRate !== sampleRate) {
+                    log(`Warning: Requested ${sampleRate}Hz, but browser is using ${actualSampleRate}Hz`, 'error');
+                    log(`The server was told ${sampleRate}Hz but will receive ${actualSampleRate}Hz audio!`, 'error');
+                    log('This may cause audio quality issues. Consider reconnecting with the actual rate.', 'error');
+                }
+                
                 document.getElementById('audioInfo').style.display = 'block';
                 document.getElementById('audioInfoText').textContent = 
-                    `Format: PCM, Sample Rate: ${sampleRate}Hz, Channels: 1 (Mono), Bit Depth: 16-bit`;
+                    `Format: PCM 16-bit, Requested: ${sampleRate}Hz, Actual: ${actualSampleRate}Hz, Channels: 1 (Mono)` + 
+                    (actualSampleRate !== sampleRate ? ' ⚠️ MISMATCH!' : '');
                 
                 processor.onaudioprocess = (e) => {
                     if (ws && ws.readyState === WebSocket.OPEN) {

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
-from typing import Annotated
+from typing import Annotated, Optional
 import asyncio
 import logfire
 from managers.transcription_rt import TranscriptionRTManager
@@ -71,8 +71,25 @@ async def transcription_websocket_endpoint(
         await websocket.close(code=1011, reason=str(e))
         return
     
-    service = transcription_manager.create_service(init_request)
-    await service.connect()
+    try:
+        service = transcription_manager.create_service(init_request)
+        await service.connect()
+        await websocket.send_json(WsResponse(
+            status=WsStatus.SUCCESS,
+            action=WsAction.TRANSCRIPTION_SESSION,
+            data={},
+            error=None
+        ).model_dump())
+    except Exception as e:
+        logfire.error(f"Error creating transcription service: {e}", exc_info=True)
+        await websocket.send_json(WsResponse(
+            status=WsStatus.ERROR,
+            action=WsAction.TRANSCRIPTION_SESSION,
+            data={},
+            error=str(e)
+        ).model_dump())
+        await websocket.close(code=1011, reason=str(e))
+        return
 
 
     async def audio_source() -> AsyncIterator[bytes]:
@@ -83,13 +100,16 @@ async def transcription_websocket_endpoint(
                 if "audio" in data:
                     chunk: TranscriptionAudioChunkWsRequest = TranscriptionAudioChunkWsRequest.model_validate(data)
                     yield chunk.audio
-                elif data.get("type") == "close":
+                elif data.get("type", None) == "close":
                     logfire.info("Client requested close")
                     break
                 else:
                     logfire.warning(f"Received unknown message from client: {data}")
         except WebSocketDisconnect:
             logfire.info("Client disconnected during audio source")
+        except asyncio.CancelledError:
+            logfire.info("Audio source cancelled (server shutdown)")
+            # Don't re-raise - allow graceful cleanup
         except Exception as e:
             logfire.error(f"Error in audio_source: {e}", exc_info=True)
             raise
@@ -100,15 +120,18 @@ async def transcription_websocket_endpoint(
             while True:
                 transcription = await queue.get()
                 await websocket.send_json(transcription.model_dump())
-                if transcription.is_end:
-                    break
         except WebSocketDisconnect:
             logfire.info("Client disconnected during transcription send")
+        except asyncio.CancelledError:
+            logfire.info("Transcription send cancelled (server shutdown)")
+            # Don't re-raise - allow graceful cleanup
         except Exception as e:
             logfire.error(f"Error sending transcriptions: {e}", exc_info=True)
             raise
 
     
+    send_task: Optional[asyncio.Task[None]] = None
+    transcribe_task: Optional[asyncio.Task[None]] = None
     try:
         # Create a queue for transcription responses
         transcription_queue: asyncio.Queue[TranscriptionWsResponse] = asyncio.Queue()
@@ -117,25 +140,48 @@ async def transcription_websocket_endpoint(
         send_task = asyncio.create_task(send_transcriptions(transcription_queue))
         
         # Start the realtime transcription (this will run until audio source is exhausted)
-        await service.realtime_transcribe(
+        transcribe_task = asyncio.create_task(service.realtime_transcribe(
             audio_source=audio_source(),
             audio_sink=transcription_queue,
             input_audio_format=init_request.input_audio_format,
             input_sample_rate=init_request.input_sample_rate
-        )
+        ))
         
-        # Wait for all transcriptions to be sent
-        await send_task
+        # Wait for transcription to complete
+        await transcribe_task
     except WebSocketDisconnect:
         logfire.info("WebSocket disconnected")
-        await service.disconnect()
+    except asyncio.CancelledError:
+        logfire.info("WebSocket session cancelled (server shutdown or client disconnect)")
+        # Don't re-raise - allow graceful cleanup
     except Exception as e:
         logfire.error(f"Error in transcription WebSocket: {e}", exc_info=True)
-        await websocket.send_json(WsResponse(
-            status=WsStatus.ERROR,
-            action=WsAction.TRANSCRIPTION_SESSION,
-            data={},
-            error=str(e)
-        ).model_dump())
-        await websocket.close(code=1011, reason=str(e))
-        await service.disconnect()
+        try:
+            await websocket.send_json(WsResponse(
+                status=WsStatus.ERROR,
+                action=WsAction.TRANSCRIPTION_SESSION,
+                data={},
+                error=str(e)
+            ).model_dump())
+            await websocket.close(code=1011, reason=str(e))
+        except Exception:
+            # Ignore errors during error handling
+            pass
+    finally:
+        # Clean up resources - cancel all tasks
+        for task, name in [(transcribe_task, "transcribe"), (send_task, "send")]:
+            if task and not task.done():
+                logfire.debug(f"Cancelling {name} task")
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    logfire.debug(f"{name} task cancelled successfully")
+                except Exception as e:
+                    logfire.error(f"Error cancelling {name} task: {e}", exc_info=True)
+        
+        # Disconnect the service
+        try:
+            await service.disconnect()
+        except Exception as e:
+            logfire.error(f"Error disconnecting service: {e}", exc_info=True)

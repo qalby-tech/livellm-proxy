@@ -6,9 +6,7 @@ from audio_ai.base import AudioAIService
 from audio_ai.base import AudioRealtimeTranscriptionService
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse
 from typing import Optional, AsyncIterator
-import websockets
 from models.audio.transcription_ws import TranscriptionWsResponse, TranscriptionAudioChunkWsRequest
-import base64
 import numpy as np
 from agents.voice.models.openai_stt import OpenAISTTModel, STTModelSettings
 from agents.voice.input import StreamedAudioInput
@@ -195,6 +193,9 @@ class OpenAIRealtimeTranscriptionService(AudioRealtimeTranscriptionService):
                     logfire.error(f"Error decoding audio chunk: {e}", exc_info=True)
                     # Continue processing other chunks even if one fails
                     continue
+        except asyncio.CancelledError:
+            logfire.info("Send audio chunk cancelled (shutdown or disconnect)")
+            # Don't re-raise - allow graceful cleanup
         except Exception as e:
             logfire.error(f"Error in send_audio_chunk: {e}", exc_info=True)
             raise
@@ -209,13 +210,18 @@ class OpenAIRealtimeTranscriptionService(AudioRealtimeTranscriptionService):
                     transcription=transcription,
                     is_end=False
                 ))
-        except websockets.exceptions.ConnectionClosed:
-            logfire.info("WebSocket connection closed")
+        except asyncio.CancelledError:
+            logfire.info("Transcription receive cancelled (shutdown or disconnect)")
+            # Don't re-raise - allow graceful cleanup
         except Exception as e:
             logfire.error(f"Error receiving audio chunk: {e}", exc_info=True)
             raise
     
     async def disconnect(self) -> None:
         if self.__session:
-            await self.__session.close()
-            self.__session = None
+            try:
+                await self.__session.close()
+            except Exception as e:
+                logfire.error(f"Error closing session: {e}", exc_info=True)
+            finally:
+                self.__session = None
