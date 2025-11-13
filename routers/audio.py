@@ -99,6 +99,10 @@ async def audio_transcribe(
     The provider UID must be configured first using POST /config endpoint.
     """
     try:
+        # Validate file is provided
+        if not file or not file.filename:
+            raise HTTPException(status_code=400, detail="No file provided")
+        
         # Validate content type
         if file.content_type and not file.content_type.startswith('audio/'):
             raise HTTPException(status_code=400, detail=f"Invalid file type. Expected audio file, got {file.content_type}")
@@ -113,6 +117,12 @@ async def audio_transcribe(
         
         # Read file contents
         file_content = await file.read()
+        
+        # Validate file is not empty
+        if not file_content or len(file_content) == 0:
+            logfire.error(f"Empty audio file received: {file.filename}")
+            raise HTTPException(status_code=400, detail="Audio file is empty")
+                
         file_tuple = (file.filename, file_content, file.content_type)
         
         # Create TranscribeRequest
@@ -129,12 +139,13 @@ async def audio_transcribe(
         return result
     
     except ValueError as e:
+        logfire.error(f"Validation error in audio_transcribe: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
         logfire.error(f"Unexpected error in audio_transcribe: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         await file.close()
 

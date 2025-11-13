@@ -7,12 +7,10 @@ from audio_ai.base import AudioRealtimeTranscriptionService
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse
 from typing import Optional, AsyncIterator
 import websockets
+from models.audio.openai_ws import OpenaiWSTranscriptionDelta, OpenaiWSTranscriptionEnd, OpenaiWSTranscriptionResponse, OpenaiWsResponse
 from models.audio.transcription_ws import TranscriptionWsResponse, TranscriptionAudioChunkWsRequest
+import json
 import base64
-import numpy as np
-from agents.voice.models.openai_stt import OpenAISTTModel, STTModelSettings
-from agents.voice.input import StreamedAudioInput
-from agents.voice.model import StreamedTranscriptionSession
 import logfire
 
 class OpenAIAudioAIService(AudioAIService):
@@ -131,84 +129,117 @@ class OpenAIRealtimeTranscriptionService(AudioRealtimeTranscriptionService):
 
     def __init__(
         self, 
-        model: str, 
-        openai_client: AsyncOpenAI,
-        language: str = "auto",
+        api_key: str, 
+        model: str = "gpt-4o-mini-transcribe", 
+        language: str = "auto", 
         input_sample_rate: int = 24000,
-        gen_config: Optional[dict] = None
+        base_url: str = "wss://api.openai.com/v1"
         ):
-        self.model = OpenAISTTModel(model, openai_client)
+        if base_url.startswith("http"):
+            base_url = base_url.replace("http", "ws")
+        if base_url.startswith("https"):
+            base_url = base_url.replace("https", "wss")
+        self.base_url = f"{base_url.rstrip('/')}/realtime"
+        self.api_key = api_key
+        self.url = f"{self.base_url}?intent=transcription"
+        self.language = language
+        self.model = model
         
         # configs
-        gen_config = gen_config or {}
-        self.language = language
-        self.turn_threshold = gen_config.get("turn_threshold", 0.5)
-        self.turn_prefix_padding_ms = gen_config.get("turn_prefix_padding_ms", 100)
-        self.turn_silence_duration_ms = gen_config.get("turn_silence_duration_ms", 100)
-        self.noise_reduction_type = gen_config.get("noise_reduction_type", "near_field") # far_field or null
-        self.prompt = gen_config.get("prompt", "")
+        self.turn_threshold = 0.5
+        self.turn_prefix_padding_ms = 100
+        self.turn_silence_duration_ms = 100
+        self.noise_reduction_type = "near_field" # far_field or null
         self.input_sample_rate = input_sample_rate
 
-        # internal
-        self.__input = StreamedAudioInput() # then use add_audio
-        self.__session: Optional[StreamedTranscriptionSession] = None
+        # session
+        self.session = None
 
-   
     @property
-    def stt_settings(self) -> STTModelSettings:
-        return STTModelSettings(
-            prompt=self.prompt,
-            language=self.language,
-            turn_detection={
-                "type": "server_vad",
-                "threshold": self.turn_threshold,
-                "prefix_padding_ms": self.turn_prefix_padding_ms,
-                "silence_duration_ms": self.turn_silence_duration_ms,
+    def headers(self) -> dict:
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "OpenAI-Beta": "realtime=v1",
         }
-        )
+    
+    
+    @property
+    def transcription_session(self) -> dict:
+        return {
+            "type": "transcription_session.update",
+            "session": {
+                "input_audio_format": "pcm16",
+                "input_audio_transcription": {"model": self.model, "language": self.language},
+                "turn_detection": {
+                    "type": "server_vad",
+                    "threshold": self.turn_threshold,
+                    "prefix_padding_ms": self.turn_prefix_padding_ms,
+                    "silence_duration_ms": self.turn_silence_duration_ms,
+                },
+                "input_audio_noise_reduction": self.noise_reduction_type,
+            },
+        }
+    
 
     async def connect(self) -> None:
-        self.__session = await self.model.create_session(
-            input=self.__input,
-            settings=self.stt_settings,
-            trace_include_sensitive_audio_data=False,
-            trace_include_sensitive_data=False
-        )
+        logfire.info(f"Connecting to OpenAI WebSocket at {self.url}")
+        self.session = await websockets.connect(self.url, additional_headers=self.headers)
+        logfire.info(f"Connected to OpenAI WebSocket")
     
     async def send_audio_chunk(self, audio_source: AsyncIterator[TranscriptionAudioChunkWsRequest]) -> None:
-        """
-        Decode base64 audio chunks and add them to the input stream.
-        Expects PCM16 audio data encoded as base64.
-        """
-        try:
-            async for chunk in audio_source:
-                try:
-                    # Decode base64 to bytes
-                    audio_bytes = base64.b64decode(chunk.audio)
-                    
-                    # Convert bytes to NumPy array of int16 (PCM16 format)
-                    audio_array = np.frombuffer(audio_bytes, dtype=np.int16)
-                    
-                    # Add the audio array to the streamed input
-                    await self.__input.add_audio(audio_array)
-                except (ValueError, TypeError) as e:
-                    logfire.error(f"Error decoding audio chunk: {e}", exc_info=True)
-                    # Continue processing other chunks even if one fails
-                    continue
-        except Exception as e:
-            logfire.error(f"Error in send_audio_chunk: {e}", exc_info=True)
-            raise
+        async for chunk in audio_source:
+            await self.session.send(
+                json.dumps(
+                    {
+                        "type": "input_audio_buffer.append",
+                        "audio": chunk.audio
+                    }
+                )
+            )
     
-    async def receive_audio_chunk(self, audio_sink: asyncio.Queue[TranscriptionWsResponse]) -> None:
+    async def recieve_audio_chunk(self, audio_sink: asyncio.Queue[TranscriptionWsResponse]) -> None:
         """
         Continuously receive transcription chunks from OpenAI WebSocket and put them in the queue
         """
         try:
-            async for transcription in self.__session.transcribe_turns():
-                await audio_sink.put(TranscriptionWsResponse(
-                    transcription=transcription,
-                    is_end=False
-                ))
+            async for response in self.session:
+                message: dict = json.loads(response)
+                message_type = message.get("type", "Unknown")
+                
+                # Log for debugging
+                print(message)
+                print(message_type)
+                
+                match message_type:
+                    case "conversation.item.input_audio_transcription.delta":
+                        delta = OpenaiWSTranscriptionDelta.model_validate(message)
+                        await audio_sink.put(TranscriptionWsResponse(
+                            transcription=delta.delta,
+                            is_end=False
+                        ))
+                    case "conversation.item.input_audio_transcription.completed":
+                        completion = OpenaiWSTranscriptionEnd.model_validate(message)
+                        await audio_sink.put(TranscriptionWsResponse(
+                            transcription=completion.transcription,
+                            is_end=True
+                        ))
+                    case "session.created":
+                        await self.session.send(
+                            json.dumps(
+                                self.transcription_session
+                            )
+                        )
+                    case "session.updated" | "input_audio_buffer.speech_started" | "input_audio_buffer.speech_stopped" | "input_audio_buffer.committed":
+                        # These are status messages we can ignore or log
+                        logfire.debug(f"Status message: {message_type}")
+                        continue
+                    case "error":
+                        error_msg = message.get("error", {}).get("message", "Unknown error")
+                        logfire.error(f"OpenAI WebSocket error: {error_msg}")
+                        raise ValueError(f"OpenAI error: {error_msg}")
+                    case _:
+                        logfire.warning(f"Unknown message type: {message_type}, message: {message}")
+                        print(message)
         except websockets.exceptions.ConnectionClosed:
             logfire.info("WebSocket connection closed")
         except Exception as e:
@@ -216,6 +247,12 @@ class OpenAIRealtimeTranscriptionService(AudioRealtimeTranscriptionService):
             raise
     
     async def disconnect(self) -> None:
-        if self.__session:
-            await self.__session.close()
-            self.__session = None
+        if self.session:
+            await self.session.close()
+            self.session = None
+            
+
+
+    # async def main(self):
+    #     client = AsyncOpenAI(api_key=self.api_key)
+    #     await client.beta.realtime.transcription_sessions.create()
