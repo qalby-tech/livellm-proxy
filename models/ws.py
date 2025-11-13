@@ -8,6 +8,7 @@ class WsAction(str, Enum):
     AUDIO_SPEAK = "audio_speak"
     AUDIO_SPEAK_STREAM = "audio_speak_stream"
     AUDIO_TRANSCRIBE = "audio_transcribe"
+    TRANSCRIPTION_SESSION = "transcription_session"
 
 
 class WsStatus(str, Enum):

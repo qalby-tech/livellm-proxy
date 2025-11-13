@@ -14,6 +14,7 @@ from agents.voice.models.openai_stt import OpenAISTTModel, STTModelSettings
 from agents.voice.input import StreamedAudioInput
 from agents.voice.model import StreamedTranscriptionSession
 import logfire
+from models.audio.speak import SpeakMimeType
 
 class OpenAIAudioAIService(AudioAIService):
     default_output_format = "pcm"
@@ -134,7 +135,6 @@ class OpenAIRealtimeTranscriptionService(AudioRealtimeTranscriptionService):
         model: str, 
         openai_client: AsyncOpenAI,
         language: str = "auto",
-        input_sample_rate: int = 24000,
         gen_config: Optional[dict] = None
         ):
         self.model = OpenAISTTModel(model, openai_client)
@@ -147,12 +147,15 @@ class OpenAIRealtimeTranscriptionService(AudioRealtimeTranscriptionService):
         self.turn_silence_duration_ms = gen_config.get("turn_silence_duration_ms", 100)
         self.noise_reduction_type = gen_config.get("noise_reduction_type", "near_field") # far_field or null
         self.prompt = gen_config.get("prompt", "")
-        self.input_sample_rate = input_sample_rate
 
         # internal
         self.__input = StreamedAudioInput() # then use add_audio
         self.__session: Optional[StreamedTranscriptionSession] = None
 
+
+    @property
+    def default_sample_rate(self) -> int:
+        return 24000
    
     @property
     def stt_settings(self) -> STTModelSettings:
@@ -175,22 +178,19 @@ class OpenAIRealtimeTranscriptionService(AudioRealtimeTranscriptionService):
             trace_include_sensitive_data=False
         )
     
-    async def send_audio_chunk(self, audio_source: AsyncIterator[TranscriptionAudioChunkWsRequest]) -> None:
+    async def send_audio_chunk(self, audio_source: AsyncIterator[bytes]) -> None:
         """
         Decode base64 audio chunks and add them to the input stream.
         Expects PCM16 audio data encoded as base64.
         """
         try:
             async for chunk in audio_source:
-                try:
-                    # Decode base64 to bytes
-                    audio_bytes = base64.b64decode(chunk.audio)
-                    
+                try:                    
                     # Convert bytes to NumPy array of int16 (PCM16 format)
-                    audio_array = np.frombuffer(audio_bytes, dtype=np.int16)
+                    audio_array = np.frombuffer(chunk, dtype=np.int16)
                     
                     # Add the audio array to the streamed input
-                    await self.__input.add_audio(audio_array)
+                    await self.__input.add_audio(audio_array) # accepts only pcm, 24_000 sample rate
                 except (ValueError, TypeError) as e:
                     logfire.error(f"Error decoding audio chunk: {e}", exc_info=True)
                     # Continue processing other chunks even if one fails

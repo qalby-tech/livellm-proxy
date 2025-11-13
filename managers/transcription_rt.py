@@ -16,7 +16,6 @@ class TranscriptionRTManager:
                 openai_client=provider_client,
                 model=request.model,
                 language=request.language,
-                input_sample_rate=request.input_sample_rate,
                 gen_config=request.gen_config
             )
         else:

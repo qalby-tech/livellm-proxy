@@ -64,6 +64,7 @@ logfire.configure(service_name="livellm-proxy", send_to_logfire="if-token-presen
 logfire.instrument_pydantic_ai()
 logfire.instrument_mcp()
 logfire.instrument_fastapi(app, capture_headers=True, excluded_urls=["/ping"])
+logfire.instrument_openai_agents()
 
 
 @app.get("/ping")

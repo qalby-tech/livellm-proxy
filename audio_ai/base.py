@@ -5,8 +5,9 @@ from models.audio.speak import SpeakRequest, SpeakResponse, SpeakStreamResponse,
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse
 from models.audio.transcription_ws import TranscriptionWsResponse, TranscriptionAudioChunkWsRequest
 from audio_ai.utils import ChunkCollector, Resampler
-from audio_ai.utils import AudioEncoder
+from audio_ai.utils.encoding import encode, decode, encode_from_pcm_stream, decode_into_pcm_stream
 import base64
+import numpy as np
 import logfire
 import time
 
@@ -49,8 +50,7 @@ class AudioAIService(ABC):
             audio = await resampler.process_chunk(audio, flush=True)
             span.set_attribute("resampled_audio_size_bytes", len(audio))
             
-            encoder = AudioEncoder(request.sample_rate, request.mime_type)
-            audio = await encoder.encode(audio)
+            audio = await encode(audio, request.mime_type)
             span.set_attribute("encoded_audio_size_bytes", len(audio))
             
             return SpeakResponse(audio=audio, content_type=request.mime_type.value, sample_rate=request.sample_rate)
@@ -83,7 +83,6 @@ class AudioAIService(ABC):
                                 
             resampler = Resampler(self.default_sample_rate, request.sample_rate)
             chunk_collector = ChunkCollector(request.sample_rate, request.chunk_size)
-            encoder = AudioEncoder(request.sample_rate, request.mime_type)
             
             async def _generator(first_chunk: bytes, generator: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
                 yield first_chunk
@@ -93,7 +92,9 @@ class AudioAIService(ABC):
             # Resample, chunk, encode
             resampled_generator = resampler.process_stream(native_generator)
             chunked_generator = chunk_collector.process_stream(resampled_generator)
-            encoded_generator = encoder.encode_stream(chunked_generator)
+            
+            # Encode stream            
+            encoded_generator = encode_from_pcm_stream(chunked_generator, request.mime_type)
             return encoded_generator, request.mime_type.value, request.sample_rate
         except StopAsyncIteration:
             async def empty_generator() -> AsyncIterator[bytes]:
@@ -115,6 +116,12 @@ class AudioRealtimeTranscriptionService(ABC):
     """
     wrapper for websocket connection for realtime transcription
     """
+    pcm_mime_type = SpeakMimeType.PCM.value
+
+    @property
+    @abstractmethod
+    def default_sample_rate(self) -> int:
+        return 24000
     
     @abstractmethod
     async def connect(self) -> None:
@@ -125,11 +132,11 @@ class AudioRealtimeTranscriptionService(ABC):
     
     
     @abstractmethod
-    async def send_audio_chunk(self, audio_source: AsyncIterator[TranscriptionAudioChunkWsRequest]) -> None:
+    async def send_audio_chunk(self, audio_source: AsyncIterator[bytes]) -> None:
         """
         Send audio chunks to the transcription service
         params:
-        - audio_source: async iterator of audio chunks (base64 encoded)
+        - audio_source: async iterator of audio chunks (pcm16)
         """
         pass
 
@@ -153,18 +160,27 @@ class AudioRealtimeTranscriptionService(ABC):
 
     async def realtime_transcribe(
         self, 
-        audio_source: AsyncIterator[TranscriptionAudioChunkWsRequest], 
-        audio_sink: asyncio.Queue[TranscriptionWsResponse]
+        audio_source: AsyncIterator[bytes], 
+        audio_sink: asyncio.Queue[TranscriptionWsResponse],
+        input_audio_format: SpeakMimeType = SpeakMimeType.PCM,
+        input_sample_rate: int = 24000
         ) -> None:
         """
         Transcribe audio to text in realtime
         params:
-        - audio_source: the source of the audio
-        - audio_sink: the sink for the transcription
-        - kwargs: additional keyword arguments
+        - audio_source: async iterator yielding audio bytes
+        - audio_sink: queue to put transcription responses into
+        - input_audio_format: format of input audio (PCM, ulaw, alaw)
+        - input_sample_rate: sample rate of input audio
         """
-        await self.connect()
+        # Decode from the input format (ulaw/alaw/pcm) to PCM
+        decoded_audio_source = decode_into_pcm_stream(audio_source, input_audio_format)
+        
+        # Resample to the service's required sample rate (typically 24kHz)
+        resampled_audio_source = Resampler(input_sample_rate, self.default_sample_rate).process_stream(decoded_audio_source)
+
+        # Run both send and receive in parallel
         await asyncio.gather(
-            self.send_audio_chunk(audio_source),
+            self.send_audio_chunk(resampled_audio_source),
             self.receive_audio_chunk(audio_sink)
         )
