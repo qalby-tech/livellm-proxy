@@ -5,14 +5,13 @@ from openai.types.audio import Transcription
 from audio_ai.base import AudioAIService
 from audio_ai.base import AudioRealtimeTranscriptionService
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse
-from typing import Optional, AsyncIterator
-from models.audio.transcription_ws import TranscriptionWsResponse, TranscriptionAudioChunkWsRequest
+from typing import Optional, AsyncIterator, Awaitable, Callable
+from models.audio.transcription_ws import TranscriptionWsResponse
 import numpy as np
 from agents.voice.models.openai_stt import OpenAISTTModel, STTModelSettings
 from agents.voice.input import StreamedAudioInput
 from agents.voice.model import StreamedTranscriptionSession
 import logfire
-from models.audio.speak import SpeakMimeType
 
 class OpenAIAudioAIService(AudioAIService):
     default_output_format = "pcm"
@@ -193,26 +192,22 @@ class OpenAIRealtimeTranscriptionService(AudioRealtimeTranscriptionService):
                     logfire.error(f"Error decoding audio chunk: {e}", exc_info=True)
                     # Continue processing other chunks even if one fails
                     continue
-        except asyncio.CancelledError:
-            logfire.info("Send audio chunk cancelled (shutdown or disconnect)")
-            # Don't re-raise - allow graceful cleanup
         except Exception as e:
             logfire.error(f"Error in send_audio_chunk: {e}", exc_info=True)
             raise
     
-    async def receive_audio_chunk(self, audio_sink: asyncio.Queue[TranscriptionWsResponse]) -> None:
+    async def receive_audio_chunk(self, audio_sink: Awaitable[Callable[[TranscriptionWsResponse], None]]) -> None:
         """
-        Continuously receive transcription chunks from OpenAI WebSocket and put them in the queue
+        Continuously receive transcription chunks from OpenAI WebSocket and send them to the client
+        params:
+        - audio_sink: awaitable to send transcription responses to
         """
         try:
             async for transcription in self.__session.transcribe_turns():
-                await audio_sink.put(TranscriptionWsResponse(
+                await audio_sink(TranscriptionWsResponse(
                     transcription=transcription,
                     is_end=False
                 ))
-        except asyncio.CancelledError:
-            logfire.info("Transcription receive cancelled (shutdown or disconnect)")
-            # Don't re-raise - allow graceful cleanup
         except Exception as e:
             logfire.error(f"Error receiving audio chunk: {e}", exc_info=True)
             raise

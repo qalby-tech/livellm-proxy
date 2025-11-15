@@ -1,13 +1,11 @@
 import asyncio
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Optional, Tuple
+from typing import AsyncIterator, Optional, Awaitable, Callable
 from models.audio.speak import SpeakRequest, SpeakResponse, SpeakStreamResponse, SpeakMimeType
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse
-from models.audio.transcription_ws import TranscriptionWsResponse, TranscriptionAudioChunkWsRequest
+from models.audio.transcription_ws import TranscriptionWsResponse
 from audio_ai.utils import ChunkCollector, Resampler
 from audio_ai.utils.encoding import encode, decode, encode_from_pcm_stream, decode_into_pcm_stream
-import base64
-import numpy as np
 import logfire
 import time
 
@@ -141,11 +139,11 @@ class AudioRealtimeTranscriptionService(ABC):
         pass
 
     @abstractmethod
-    async def receive_audio_chunk(self, audio_sink: asyncio.Queue[TranscriptionWsResponse]) -> None:
+    async def receive_audio_chunk(self, audio_sink: Awaitable[Callable[[TranscriptionWsResponse], None]]) -> None:
         """
-        Receive transcription chunks from the service and put them in the queue
+        Receive transcription chunks from the service and send them to the client
         params:
-        - audio_sink: queue to put transcription responses
+        - audio_sink: awaitable to send transcription responses to
         """
         pass
 
@@ -161,7 +159,7 @@ class AudioRealtimeTranscriptionService(ABC):
     async def realtime_transcribe(
         self, 
         audio_source: AsyncIterator[bytes], 
-        audio_sink: asyncio.Queue[TranscriptionWsResponse],
+        audio_sink: Awaitable[Callable[[TranscriptionWsResponse], None]],
         input_audio_format: SpeakMimeType = SpeakMimeType.PCM,
         input_sample_rate: int = 24000
         ) -> None:
@@ -169,44 +167,27 @@ class AudioRealtimeTranscriptionService(ABC):
         Transcribe audio to text in realtime
         params:
         - audio_source: async iterator yielding audio bytes
-        - audio_sink: queue to put transcription responses into
+        - audio_sink: awaitable to send transcription responses to
         - input_audio_format: format of input audio (PCM, ulaw, alaw)
         - input_sample_rate: sample rate of input audio
         """
         send_task = None
         receive_task = None
         try:
-            # Decode from the input format (ulaw/alaw/pcm) to PCM
+            # preprate the audio source
+            ## Decode from the input format (ulaw/alaw/pcm) to PCM
             decoded_audio_source = decode_into_pcm_stream(audio_source, input_audio_format)
-            
-            # Resample to the service's required sample rate (typically 24kHz)
+            ## Resample to the service's required sample rate (typically 24kHz)
             resampled_audio_source = Resampler(input_sample_rate, self.default_sample_rate).process_stream(decoded_audio_source)
-
-            # Create tasks for both send and receive
+            ## create send task
             send_task = asyncio.create_task(self.send_audio_chunk(resampled_audio_source))
+
+            # preprate the audio sink
+            ## preprate the receiver
             receive_task = asyncio.create_task(self.receive_audio_chunk(audio_sink))
             
             # Wait for both tasks
             await asyncio.gather(send_task, receive_task)
-            # await asyncio.wait([send_task, receive_task], return_when=asyncio.FIRST_COMPLETED)
-        except asyncio.CancelledError:
-            logfire.info("Realtime transcription cancelled")
-            # Cancel both tasks if they're still running
-            for task in [send_task, receive_task]:
-                if task and not task.done():
-                    task.cancel()
-            # Wait for cancellation to complete
-            if send_task:
-                try:
-                    await send_task
-                except asyncio.CancelledError:
-                    pass
-            if receive_task:
-                try:
-                    await receive_task
-                except asyncio.CancelledError:
-                    pass
-            # Don't re-raise - allow graceful cleanup
         except Exception as e:
             logfire.error(f"Error in realtime_transcribe: {e}", exc_info=True)
             # Cancel both tasks on error

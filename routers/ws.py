@@ -4,7 +4,7 @@ from managers.ws import WsManager
 from models.ws import WsRequest
 
 
-ws_router = APIRouter(tags=["ws"])
+ws_router = APIRouter(prefix="/ws", tags=["ws"])
 
 
 def get_ws_manager(websocket: WebSocket) -> WsManager:
@@ -12,7 +12,7 @@ def get_ws_manager(websocket: WebSocket) -> WsManager:
 
 WsManagerDep = Annotated[WsManager, Depends(get_ws_manager)]
 
-@ws_router.websocket("/ws")
+@ws_router.websocket("/") # default route
 async def websocket_endpoint(websocket: WebSocket, ws_manager: WsManagerDep):
     """
     Generic WebSocket endpoint that accepts any request and routes it to the appropriate handler.
