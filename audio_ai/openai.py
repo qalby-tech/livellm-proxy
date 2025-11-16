@@ -180,21 +180,17 @@ class OpenAIRealtimeTranscriptionService(AudioRealtimeTranscriptionService):
         Decode base64 audio chunks and add them to the input stream.
         Expects PCM16 audio data encoded as base64.
         """
-        try:
-            async for chunk in audio_source:
-                try:                    
-                    # Convert bytes to NumPy array of int16 (PCM16 format)
-                    audio_array = np.frombuffer(chunk, dtype=np.int16)
-                    
-                    # Add the audio array to the streamed input
-                    await self.__input.add_audio(audio_array) # accepts only pcm, 24_000 sample rate
-                except (ValueError, TypeError) as e:
-                    logfire.error(f"Error decoding audio chunk: {e}", exc_info=True)
-                    # Continue processing other chunks even if one fails
-                    continue
-        except Exception as e:
-            logfire.error(f"Error in send_audio_chunk: {e}", exc_info=True)
-            raise
+        async for chunk in audio_source:
+            try:                    
+                # Convert bytes to NumPy array of int16 (PCM16 format)
+                audio_array = np.frombuffer(chunk, dtype=np.int16)
+                
+                # Add the audio array to the streamed input
+                await self.__input.add_audio(audio_array) # accepts only pcm, 24_000 sample rate
+            except (ValueError, TypeError) as e:
+                logfire.error(f"Error decoding audio chunk: {e}", exc_info=True)
+                # Continue processing other chunks even if one fails
+                continue
     
     async def receive_audio_chunk(self, audio_sink: Awaitable[Callable[[TranscriptionWsResponse], None]]) -> None:
         """
@@ -202,15 +198,11 @@ class OpenAIRealtimeTranscriptionService(AudioRealtimeTranscriptionService):
         params:
         - audio_sink: awaitable to send transcription responses to
         """
-        try:
-            async for transcription in self.__session.transcribe_turns():
-                await audio_sink(TranscriptionWsResponse(
-                    transcription=transcription,
-                    is_end=False
-                ))
-        except Exception as e:
-            logfire.error(f"Error receiving audio chunk: {e}", exc_info=True)
-            raise
+        async for transcription in self.__session.transcribe_turns():
+            await audio_sink(TranscriptionWsResponse(
+                transcription=transcription,
+                is_end=False
+            ))
     
     async def disconnect(self) -> None:
         if self.__session:

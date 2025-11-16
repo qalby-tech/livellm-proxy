@@ -15,7 +15,7 @@ WsManagerDep = Annotated[WsManager, Depends(get_ws_manager)]
 @ws_router.websocket("/") # default route
 async def websocket_endpoint(websocket: WebSocket, ws_manager: WsManagerDep):
     """
-    Generic WebSocket endpoint that accepts any request and routes it to the appropriate handler.
+    Generic WebSocket endpoint over HTTP that accepts any request and routes it to the appropriate handler.
     
     The client sends WsRequest with:
     - action: The action to perform (agent_run, agent_run_stream, audio_speak, etc.)

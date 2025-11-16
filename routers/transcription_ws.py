@@ -1,4 +1,4 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, WebSocketException
 from typing import Annotated
 from managers.transcription_rt import TranscriptionRTManager
 from models.audio.transcription_ws import (
@@ -12,7 +12,7 @@ from starlette.websockets import WebSocketState
 import logfire
 
 
-transcription_ws_router = APIRouter(prefix="/ws/audio", tags=["transcription_ws"])
+transcription_ws_router = APIRouter(prefix="/ws", tags=["transcription_ws"])
 
 
 def get_transcription_rt_manager(websocket: WebSocket) -> TranscriptionRTManager:
@@ -107,7 +107,14 @@ async def transcription_websocket_endpoint(
         """Task that sends transcriptions to client"""
         while websocket.client_state == WebSocketState.CONNECTED:
             transcription: TranscriptionWsResponse = yield
-            await websocket.send_json(transcription.model_dump())
+            try:
+                await websocket.send_json(transcription.model_dump())
+            except WebSocketException as e:
+                if e.code == 1005: 
+                    # client disconnected
+                    break
+                else:
+                    raise e
 
     try:        
         # Start the realtime transcription (this will run until audio source is exhausted)

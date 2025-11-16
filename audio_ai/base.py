@@ -189,7 +189,6 @@ class AudioRealtimeTranscriptionService(ABC):
             # Wait for both tasks
             await asyncio.gather(send_task, receive_task)
         except Exception as e:
-            logfire.error(f"Error in realtime_transcribe: {e}", exc_info=True)
             # Cancel both tasks on error
             for task in [send_task, receive_task]:
                 if task and not task.done():
