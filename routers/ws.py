@@ -12,6 +12,7 @@ def get_ws_manager(websocket: WebSocket) -> WsManager:
 
 WsManagerDep = Annotated[WsManager, Depends(get_ws_manager)]
 
+@ws_router.websocket("")
 @ws_router.websocket("/") # default route
 async def websocket_endpoint(websocket: WebSocket, ws_manager: WsManagerDep):
     """
