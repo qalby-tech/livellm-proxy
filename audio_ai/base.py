@@ -139,7 +139,7 @@ class AudioRealtimeTranscriptionService(ABC):
         pass
 
     @abstractmethod
-    async def receive_audio_chunk(self, audio_sink: Awaitable[Callable[[TranscriptionWsResponse], None]]) -> None:
+    async def receive_audio_chunk(self, audio_sink: Callable[[TranscriptionWsResponse], Awaitable[None]]) -> None:
         """
         Receive transcription chunks from the service and send them to the client
         params:
@@ -159,7 +159,7 @@ class AudioRealtimeTranscriptionService(ABC):
     async def realtime_transcribe(
         self, 
         audio_source: AsyncIterator[bytes], 
-        audio_sink: Awaitable[Callable[[TranscriptionWsResponse], None]],
+        audio_sink: Callable[[TranscriptionWsResponse], Awaitable[None]],
         input_audio_format: SpeakMimeType = SpeakMimeType.PCM,
         input_sample_rate: int = 24000
         ) -> None:

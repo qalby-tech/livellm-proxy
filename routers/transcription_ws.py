@@ -103,24 +103,24 @@ async def transcription_websocket_endpoint(
                 logfire.error(f"Error validating audio chunk: {e}", exc_info=True)
                 continue
     
-    async def send_transcriptions() -> AsyncIterator[TranscriptionWsResponse]:
-        """Task that sends transcriptions to client"""
-        while websocket.client_state == WebSocketState.CONNECTED:
-            transcription: TranscriptionWsResponse = yield
-            try:
-                await websocket.send_json(transcription.model_dump())
-            except WebSocketException as e:
-                if e.code == 1005: 
-                    # client disconnected
-                    break
-                else:
-                    raise e
+    async def send_transcription(transcription: TranscriptionWsResponse) -> None:
+        """Send a single transcription to client"""
+        if websocket.client_state != WebSocketState.CONNECTED:
+            return
+        try:
+            await websocket.send_json(transcription.model_dump())
+        except WebSocketException as e:
+            if e.code == 1005: 
+                # client disconnected
+                return
+            else:
+                raise e
 
     try:        
         # Start the realtime transcription (this will run until audio source is exhausted)
         await service.realtime_transcribe(
             audio_source=audio_source(),
-            audio_sink=send_transcriptions(),
+            audio_sink=send_transcription,
             input_audio_format=init_request.input_audio_format,
             input_sample_rate=init_request.input_sample_rate,
         )
