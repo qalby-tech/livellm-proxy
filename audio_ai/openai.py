@@ -43,17 +43,16 @@ class OpenAIAudioAIService(AudioAIService):
                 "gen_ai.request.parameters": config
             }
         ) as span:
-            speech: HttpxBinaryResponseContent = await self.client.audio.speech.create(
-                model=model,
-                input=text,
-                voice=voice,
-                response_format=self.default_output_format,
-                **config
-            )
-            audio_bytes = speech.content
-            span.set_attribute("gen_ai.response.audio_size_bytes", len(audio_bytes))
-            span.set_attribute("gen_ai.response.duration_seconds", len(audio_bytes) / (self.default_sample_rate * 2))
-            return audio_bytes
+            pass
+        speech: HttpxBinaryResponseContent = await self.client.audio.speech.create(
+            model=model,
+            input=text,
+            voice=voice,
+            response_format=self.default_output_format,
+            **config
+        )
+        audio_bytes = speech.content
+        return audio_bytes
     
     async def stream_text2speech(self, model: str, text: str, voice: str, gen_config: Optional[dict] = None) -> AsyncIterator[bytes]:
         config = gen_config or {}
@@ -73,20 +72,16 @@ class OpenAIAudioAIService(AudioAIService):
                 "gen_ai.request.parameters": config
             }
         ) as span:
-            total_bytes = 0
-            async with self.client.audio.speech.with_streaming_response.create(
-                model=model,
-                input=text,
-                voice=voice,
-                response_format=self.default_output_format,
-                **config
-            ) as stream_response:
-                async for chunk in stream_response.iter_bytes():
-                    total_bytes += len(chunk)
-                    yield chunk
-            
-            span.set_attribute("gen_ai.response.audio_size_bytes", total_bytes)
-            span.set_attribute("gen_ai.response.duration_seconds", total_bytes / (self.default_sample_rate * 2))
+            pass
+        async with self.client.audio.speech.with_streaming_response.create(
+            model=model,
+            input=text,
+            voice=voice,
+            response_format=self.default_output_format,
+            **config
+        ) as stream_response:
+            async for chunk in stream_response.iter_bytes():
+                yield chunk
     
     async def transcribe(self, request: TranscribeRequest) -> TranscribeResponse:
         config = request.gen_config or {}
