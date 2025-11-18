@@ -59,7 +59,7 @@ class WsManager:
                 yield WsResponse(
                     status=WsStatus.STREAMING,
                     action=action,
-                    data=chunk
+                    data=chunk.model_dump()
                 )
             yield WsResponse(
                 status=WsStatus.SUCCESS,
@@ -107,6 +107,13 @@ class WsManager:
         response = await self.handle_request(request)
         if isinstance(response, AsyncIterator):
             async for chunk in response:
-                await websocket.send_json(chunk.model_dump())
+                print("CHUNK", chunk.model_dump())
+                print("CHUNK TYPE", type(chunk))
+                try:
+                    await websocket.send_json(chunk.model_dump())
+                    print("CHUNK SENT")
+                except Exception as e:
+                    print("ERROR SENDING CHUNK", e)
+                    break
         else:
             await websocket.send_json(response.model_dump())
