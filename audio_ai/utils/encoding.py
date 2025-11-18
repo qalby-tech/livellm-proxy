@@ -48,13 +48,19 @@ async def decode(audio: bytes, mime_type: SpeakMimeType) -> bytes:
 
 async def encode_from_pcm_stream(generator: AsyncIterator[bytes], mime_type: SpeakMimeType) -> AsyncIterator[bytes]:
     """
-    transforms pcm chunks to the target mime type
+    Transform a stream of PCM chunks into the target mime type.
+
+    This is implemented as an async *generator* so it can be passed
+    directly to FastAPI/Starlette `StreamingResponse`.
     """
-    if mime_type == SpeakMimeType.WAV \
-        or mime_type == SpeakMimeType.MP3:
-        raise ValueError(f"{mime_type.value} encoding is not supported for streaming")
+    if mime_type == SpeakMimeType.WAV or mime_type == SpeakMimeType.MP3:
+        # These formats are not supported in streaming mode because they
+        # typically require full-file headers.
+        raise ValueError(f"{mime_type.value} encoding is not supported")
+
     async for audio in generator:
-        return await encode(audio, mime_type)
+        # Yield each encoded chunk instead of returning once.
+        yield await encode(audio, mime_type)
 
 
 async def decode_into_pcm_stream(generator: AsyncIterator[bytes], mime_type: SpeakMimeType) -> AsyncIterator[bytes]:
