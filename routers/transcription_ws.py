@@ -4,7 +4,8 @@ from managers.transcription_rt import TranscriptionRTManager
 from models.audio.transcription_ws import (
     TranscriptionInitWsRequest,
     TranscriptionAudioChunkWsRequest,
-    TranscriptionWsResponse
+    TranscriptionWsResponse,
+    TranscriptionInitWsResponse
 )
 from models.ws import WsResponse, WsAction, WsStatus
 from typing import AsyncIterator
@@ -62,32 +63,23 @@ async def transcription_websocket_endpoint(
         init_request = TranscriptionInitWsRequest.model_validate(init_data)
     except Exception as e:
         logfire.error(f"Invalid initialization request: {e}")
-        await websocket.send_json(WsResponse(
-            status=WsStatus.ERROR,
-            action=WsAction.TRANSCRIPTION_SESSION,
-            data={},
-            error=str(e)
-        ).model_dump())
+        await websocket.send_json(
+            TranscriptionInitWsResponse(success=False, error=str(e)).model_dump()
+        )
         await websocket.close(code=1011, reason=str(e))
         return
     
     try:
         service = transcription_manager.create_service(init_request)
         await service.connect()
-        await websocket.send_json(WsResponse(
-            status=WsStatus.SUCCESS,
-            action=WsAction.TRANSCRIPTION_SESSION,
-            data={},
-            error=None
-        ).model_dump())
+        await websocket.send_json(
+            TranscriptionInitWsResponse(success=True, error=None).model_dump()
+        )
     except Exception as e:
         logfire.error(f"Error creating transcription service: {e}", exc_info=True)
-        await websocket.send_json(WsResponse(
-            status=WsStatus.ERROR,
-            action=WsAction.TRANSCRIPTION_SESSION,
-            data={},
-            error=str(e)
-        ).model_dump())
+        await websocket.send_json(
+            TranscriptionInitWsResponse(success=False, error=str(e)).model_dump()
+        )
         await websocket.close(code=1011, reason=str(e))
         return
 
@@ -103,12 +95,15 @@ async def transcription_websocket_endpoint(
                 logfire.error(f"Error validating audio chunk: {e}", exc_info=True)
                 continue
     
-    async def send_transcription(transcription: TranscriptionWsResponse) -> None:
+    async def send_transcription(transcription: str) -> None:
         """Send a single transcription to client"""
         if websocket.client_state != WebSocketState.CONNECTED:
             return
         try:
-            await websocket.send_json(transcription.model_dump())
+            response = TranscriptionWsResponse(
+                transcription=transcription
+            )
+            await websocket.send_json(response.model_dump())
         except WebSocketException as e:
             if e.code == 1005: 
                 # client disconnected

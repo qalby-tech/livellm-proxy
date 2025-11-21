@@ -53,21 +53,24 @@ class WsManager:
         return await self.audio_manager.safe_transcribe(payload)
     
     
-    async def handle_stream_response(self, data: AsyncIterator[BaseModel], action: WsAction) -> AsyncIterator[WsResponse]:
+    async def handle_stream_response(self, data: AsyncIterator[BaseModel], action: WsAction, session_id: str) -> AsyncIterator[WsResponse]:
         try:
             async for chunk in data:
                 yield WsResponse(
+                    session_id=session_id,
                     status=WsStatus.STREAMING,
                     action=action,
                     data=chunk.model_dump()
                 )
             yield WsResponse(
+                session_id=session_id,
                 status=WsStatus.SUCCESS,
                 action=action,
                 data={}
             )
         except Exception as e:
             yield WsResponse(
+                session_id=session_id,
                 status=WsStatus.ERROR,
                 action=action,
                 data={},
@@ -88,15 +91,17 @@ class WsManager:
                 case WsAction.AUDIO_TRANSCRIBE:
                     response = await self.handle_transcribe(request.payload)
             if isinstance(response, AsyncIterator):
-                return self.handle_stream_response(response, request.action)
+                return self.handle_stream_response(response, request.action, request.session_id)
             else:
                 return WsResponse(
+                    session_id=request.session_id,
                     status=WsStatus.SUCCESS,
                     action=request.action,
                     data=response.model_dump()
                 )
         except Exception as e:
             return WsResponse(
+                session_id=request.session_id,
                 status=WsStatus.ERROR,
                 action=request.action,
                 data={},
@@ -107,13 +112,9 @@ class WsManager:
         response = await self.handle_request(request)
         if isinstance(response, AsyncIterator):
             async for chunk in response:
-                print("CHUNK", chunk.model_dump())
-                print("CHUNK TYPE", type(chunk))
                 try:
                     await websocket.send_json(chunk.model_dump())
-                    print("CHUNK SENT")
                 except Exception as e:
-                    print("ERROR SENDING CHUNK", e)
                     break
         else:
             await websocket.send_json(response.model_dump())

@@ -187,17 +187,14 @@ class OpenAIRealtimeTranscriptionService(AudioRealtimeTranscriptionService):
                 # Continue processing other chunks even if one fails
                 continue
     
-    async def receive_audio_chunk(self, audio_sink: Callable[[TranscriptionWsResponse], Awaitable[None]]) -> None:
+    async def receive_audio_chunk(self, audio_sink: Callable[[str], Awaitable[None]]) -> None:
         """
         Continuously receive transcription chunks from OpenAI WebSocket and send them to the client
         params:
         - audio_sink: callable to send transcription responses to
         """
         async for transcription in self.__session.transcribe_turns():
-            await audio_sink(TranscriptionWsResponse(
-                transcription=transcription,
-                is_end=False
-            ))
+            await audio_sink(transcription)
     
     async def disconnect(self) -> None:
         if self.__session:

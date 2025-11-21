@@ -159,7 +159,7 @@ class AudioRealtimeTranscriptionService(ABC):
     async def realtime_transcribe(
         self, 
         audio_source: AsyncIterator[bytes], 
-        audio_sink: Callable[[TranscriptionWsResponse], Awaitable[None]],
+        audio_sink: Callable[[str], Awaitable[None]],
         input_audio_format: SpeakMimeType = SpeakMimeType.PCM,
         input_sample_rate: int = 24000
         ) -> None:
