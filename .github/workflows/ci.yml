@@ -13,6 +13,7 @@ on:
 env:
   REGISTRY: docker.io
   IMAGE_NAME: kamasalyamov/livellm-proxy
+  CHART_REPO: qalby-tech/livellm-proxy-chart
 
 jobs:
   test:
@@ -83,3 +84,57 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+  
+  update-chart:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write  # Required for commit signing (if enabled)
+    steps:
+      - name: Checkout current repository code
+        uses: actions/checkout@v4
+            
+      - name: Extract version from pyproject.toml
+        id: version
+        run: |
+          VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
+      
+      - name: Checkout chart repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CHART_REPO }}
+          token: ${{ secrets.CHART_REPO_TOKEN }}
+          path: chart-repo
+
+      - name: Update Chart.yaml
+        id: update-chart
+        working-directory: chart-repo
+        run: |
+          APP_VERSION="${{ steps.version.outputs.VERSION }}"
+          CURRENT_APP_VERSION=$(grep '^appVersion:' Chart.yaml | sed 's/appVersion: "\(.*\)"/\1/')
+          
+          if [ "$APP_VERSION" == "$CURRENT_APP_VERSION" ]; then
+            echo "App version unchanged. Skipping chart update."
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Update appVersion
+          sed -i "s/appVersion:.*/appVersion: \"$APP_VERSION\"/" Chart.yaml
+          
+          echo "Updated appVersion in Chart.yaml:"
+          cat Chart.yaml
+          echo "updated_app_version=$APP_VERSION" >> $GITHUB_OUTPUT
+      
+      - name: Commit and push changes
+        if: steps.update-chart.outputs.skip != 'true'
+        working-directory: chart-repo
+        run: |
+          git config user.name "github-actions"
+          git config user.email "kamasalyamov@gmail.com"
+          git add Chart.yaml
+          git commit -m "chore(chart): release app version ${{ steps.version.outputs.VERSION }}"
+          git push origin main
