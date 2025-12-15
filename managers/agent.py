@@ -12,7 +12,7 @@ from pydantic_ai.messages import UserPromptPart, TextPart, SystemPromptPart
 # models
 from pydantic_ai import ModelSettings
 from pydantic_ai.models import Model
-from pydantic_ai.models.openai import OpenAIResponsesModel
+from pydantic_ai.models.openai import OpenAIResponsesModel, OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.google import GoogleProvider
@@ -50,6 +50,9 @@ class AgentManager:
         if provider_kind == ProviderKind.OPENAI:
             provider_client = OpenAIProvider(openai_client=provider_client)
             model_base = OpenAIResponsesModel
+        elif provider_kind == ProviderKind.OPENAI_CHAT:
+            provider_client = OpenAIProvider(openai_client=provider_client)
+            model_base = OpenAIChatModel
         elif provider_kind == ProviderKind.GOOGLE:
             provider_client = GoogleProvider(client=provider_client)
             model_base = GoogleModel

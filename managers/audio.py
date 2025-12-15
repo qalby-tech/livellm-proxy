@@ -33,6 +33,8 @@ class AudioManager:
         service: AudioAIService
         if provider_kind == ProviderKind.OPENAI:
             service = OpenAIAudioAIService(client=provider_client)
+        elif provider_kind == ProviderKind.OPENAI_CHAT:
+            service = OpenAIAudioAIService(client=provider_client)
         elif provider_kind == ProviderKind.ELEVENLABS:
             service = ElevenLabsAudioAIService(client=provider_client)
         else:

@@ -18,5 +18,12 @@ class TranscriptionRTManager:
                 language=request.language,
                 gen_config=request.gen_config
             )
+        elif provider_kind == ProviderKind.OPENAI_CHAT:
+            return OpenAIRealtimeTranscriptionService(
+                openai_client=provider_client,
+                model=request.model,
+                language=request.language,
+                gen_config=request.gen_config
+            )
         else:
             raise ValueError(f"Provider {provider_kind} not supported for transcription services")

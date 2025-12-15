@@ -58,7 +58,7 @@ class ConfigManager:
         # Extract the actual API key from SecretStr
         api_key = settings.api_key.get_secret_value()
         
-        if settings.provider == ProviderKind.OPENAI:
+        if settings.provider == ProviderKind.OPENAI or settings.provider == ProviderKind.OPENAI_CHAT:
             return AsyncOpenAI(api_key=api_key, base_url=settings.base_url)
         elif settings.provider == ProviderKind.GOOGLE:
             return genai.Client(api_key=api_key, http_options=genai.types.HttpOptions(base_url=settings.base_url))
