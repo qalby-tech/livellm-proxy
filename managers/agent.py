@@ -7,7 +7,7 @@ from pydantic_ai.mcp import MCPServerStreamableHTTP
 
 # messages
 from pydantic_ai import BinaryContent, ModelMessage, ModelRequest, ModelResponse
-from pydantic_ai.messages import UserPromptPart, TextPart, SystemPromptPart
+from pydantic_ai.messages import UserPromptPart, TextPart, SystemPromptPart, ToolCallPart, ToolReturnPart
 
 # models
 from pydantic_ai import ModelSettings
@@ -23,7 +23,7 @@ from pydantic_ai.providers.groq import GroqProvider
 # pydantic models
 from models.common import ProviderKind
 from models.agent.tools import WebSearchInput, MCPStreamableServerInput, ToolKind, ToolInput
-from models.agent.chat import MessageRole, TextMessage, BinaryMessage
+from models.agent.chat import MessageRole, TextMessage, BinaryMessage, ToolCallMessage, ToolReturnMessage
 from models.agent.agent import AgentRequest, AgentResponse, AgentResponseUsage
 from models.fallback import AgentFallbackRequest
 from managers.config import ConfigManager
@@ -116,11 +116,49 @@ class AgentManager:
         elif msg.role == MessageRole.SYSTEM:
             parts.append(SystemPromptPart(content=msg.content))
             return ModelRequest(parts=parts)
+        elif msg.role == MessageRole.TOOL_CALL:
+            parts.append(ToolCallPart(tool_name=msg.tool_name, args=msg.args))
+            return ModelRequest(parts=parts)
+        elif msg.role == MessageRole.TOOL_RETURN:
+            parts.append(ToolReturnPart(tool_name=msg.tool_name, content=msg.content))
+            return ModelResponse(parts=parts)
         else:
             raise ValueError(f"Unknown message role: {msg.role}")
     
     def convert_msgs(self, msgs: List[Union[TextMessage, BinaryMessage]]) -> List[Union[ModelMessage, ModelResponse]]:
         return [self.convert_msg(msg) for msg in msgs]
+    
+    def convert_history_to_msgs(self, history: List[Union[ModelRequest, ModelResponse]]) -> List[Union[TextMessage, BinaryMessage, ToolCallMessage, ToolReturnMessage]]:
+        msgs = []
+        for msg in history:
+            for part in msg.parts:
+                if isinstance(part, UserPromptPart):
+                    msgs.append(TextMessage(role=MessageRole.USER, content=part.content))
+                elif isinstance(part, TextPart):
+                    msgs.append(TextMessage(role=MessageRole.MODEL, content=part.content))
+                elif isinstance(part, SystemPromptPart):
+                    msgs.append(TextMessage(role=MessageRole.SYSTEM, content=part.content))
+                elif isinstance(part, ToolCallPart):
+                    msgs.append(ToolCallMessage(
+                        role=MessageRole.TOOL_CALL,
+                        tool_name=part.tool_name,
+                        args=part.args
+                    ))
+                elif isinstance(part, ToolReturnPart):
+                    msgs.append(ToolReturnMessage(
+                        role=MessageRole.TOOL_RETURN,
+                        tool_name=part.tool_name,
+                        content=part.content
+                    ))
+                elif isinstance(part, BinaryContent):
+                    # Encode binary data back to base64 for the response
+                    encoded_data = base64.b64encode(part.data).decode('utf-8')
+                    msgs.append(BinaryMessage(
+                        role=MessageRole.USER,
+                        content=encoded_data,
+                        mime_type=part.media_type
+                    ))
+        return msgs
         
     async def _run_stream_generator(
         self,
@@ -128,7 +166,8 @@ class AgentManager:
         prompt: List[Union[str, BinaryContent]],
         history: List[Union[ModelMessage, ModelResponse]],
         builtin_tools: List,
-        mcp_servers: List
+        mcp_servers: List,
+        include_history: bool = False
     ) -> AsyncIterator[AgentResponse]:
         """Internal generator that properly manages the streaming context"""
         async with self.agent:
@@ -155,7 +194,8 @@ class AgentManager:
                     usage=AgentResponseUsage(
                         input_tokens=usage.input_tokens,
                         output_tokens=usage.output_tokens,
-                    )
+                    ),
+                    history=self.convert_history_to_msgs(stream_response.all_messages()) if include_history else None
                 )
     
     async def _validated_stream_generator(
@@ -164,7 +204,8 @@ class AgentManager:
         prompt: List[Union[str, BinaryContent]],
         history: List[Union[ModelMessage, ModelResponse]],
         builtin_tools: List,
-        mcp_servers: List
+        mcp_servers: List,
+        include_history: bool = False
     ) -> AsyncIterator[AgentResponse]:
         """
         Validates first token generation before returning the stream.
@@ -175,7 +216,8 @@ class AgentManager:
             prompt=prompt,
             history=history,
             builtin_tools=builtin_tools,
-            mcp_servers=mcp_servers
+            mcp_servers=mcp_servers,
+            include_history=include_history
         )
         
         # Get the first chunk to validate the stream works
@@ -232,7 +274,8 @@ class AgentManager:
                 prompt=prompt,
                 history=history,
                 builtin_tools=builtin_tools,
-                mcp_servers=mcp_servers
+                mcp_servers=mcp_servers,
+                include_history=payload.include_history
             )
         else:
             async with self.agent:
@@ -250,7 +293,9 @@ class AgentManager:
                     usage=AgentResponseUsage(
                         input_tokens=usage.input_tokens,
                         output_tokens=usage.output_tokens,
-                    ))
+                    ),
+                    history=self.convert_history_to_msgs(result.all_messages()) if payload.include_history else None
+                )
 
     async def safe_run(
         self,

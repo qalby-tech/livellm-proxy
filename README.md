@@ -89,7 +89,8 @@ const ws = new WebSocket('ws://localhost:8000/livellm/ws');
        "provider_uid": "openai-1",
        "model": "gpt-4",
        "messages": [{"role": "user", "content": "Hello!"}],
-       "tools": []
+       "tools": [],
+       "include_history": false
      }
    }
    ```
@@ -97,6 +98,7 @@ const ws = new WebSocket('ws://localhost:8000/livellm/ws');
 2. **`agent_run_stream`** - Run agent (streaming)
    - Same payload as `agent_run`
    - Returns multiple messages with `status: "streaming"` followed by final `status: "success"`
+   - When `include_history: true`, the final message includes full conversation history
 
 3. **`audio_speak`** - Text-to-Speech (non-streaming)
    ```json
@@ -440,9 +442,18 @@ Content-Type: application/json
   "gen_config": {
     "temperature": 0.7,
     "max_tokens": 1000
-  }
+  },
+  "include_history": false
 }
 ```
+
+**Request Parameters:**
+- `provider_uid` (required): Provider configuration UID
+- `model` (required): Model name to use
+- `messages` (required): Array of conversation messages
+- `tools` (optional): Array of tools to enable (web search, MCP servers)
+- `gen_config` (optional): Model-specific generation config (temperature, max_tokens, etc.)
+- `include_history` (optional, default: `false`): Include full conversation history in response
 
 **Fallback Request (Sequential):**
 ```json
@@ -670,6 +681,53 @@ Tries all providers simultaneously and returns the first successful response.
   "caption": "Optional caption"
 }
 ```
+
+### Tool Call Message
+```json
+{
+  "role": "tool_call",
+  "tool_name": "web_search",
+  "args": {"query": "search term"}
+}
+```
+
+### Tool Return Message
+```json
+{
+  "role": "tool_return",
+  "tool_name": "web_search",
+  "content": "Search results..."
+}
+```
+
+## Response Format
+
+### Agent Response
+```json
+{
+  "output": "The generated response text",
+  "usage": {
+    "input_tokens": 150,
+    "output_tokens": 50
+  },
+  "history": [
+    {"role": "user", "content": "Hello!"},
+    {"role": "model", "content": "Hi there!"},
+    {"role": "tool_call", "tool_name": "web_search", "args": {...}},
+    {"role": "tool_return", "tool_name": "web_search", "content": "..."}
+  ]
+}
+```
+
+**Response Fields:**
+- `output` (string): The generated response text
+- `usage` (object): Token usage statistics
+  - `input_tokens` (int): Number of input tokens used
+  - `output_tokens` (int): Number of output tokens used
+- `history` (array, optional): Full conversation history including tool calls and returns
+  - Only included when `include_history: true` in the request
+  - Contains all messages exchanged during the conversation
+  - Useful for maintaining conversation state across requests
 
 ## Environment Variables
 
