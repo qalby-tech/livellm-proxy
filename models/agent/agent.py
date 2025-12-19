@@ -9,7 +9,7 @@ from models.agent.chat import TextMessage, BinaryMessage, ToolCallMessage, ToolR
 
 class AgentRequest(BaseRequest):
     model: str = Field(..., description="The model to use")
-    messages: List[Union[TextMessage, BinaryMessage]]
+    messages: List[Union[TextMessage, BinaryMessage, ToolCallMessage, ToolReturnMessage]]
     tools: List[Union[WebSearchInput, MCPStreamableServerInput]]
     gen_config: Optional[dict] = Field(default=None, description="The configuration for the generation")
     include_history: bool = Field(default=False, description="Whether to include the history in the response")

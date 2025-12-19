@@ -118,10 +118,10 @@ class AgentManager:
             return ModelRequest(parts=parts)
         elif msg.role == MessageRole.TOOL_CALL:
             parts.append(ToolCallPart(tool_name=msg.tool_name, args=msg.args))
-            return ModelRequest(parts=parts)
+            return ModelResponse(parts=parts)
         elif msg.role == MessageRole.TOOL_RETURN:
             parts.append(ToolReturnPart(tool_name=msg.tool_name, content=msg.content))
-            return ModelResponse(parts=parts)
+            return ModelRequest(parts=parts)
         else:
             raise ValueError(f"Unknown message role: {msg.role}")
     
@@ -133,11 +133,14 @@ class AgentManager:
         for msg in history:
             for part in msg.parts:
                 if isinstance(part, UserPromptPart):
-                    msgs.append(TextMessage(role=MessageRole.USER, content=part.content))
+                    content = part.content[0] if isinstance(part.content, list) else part.content
+                    msgs.append(TextMessage(role=MessageRole.USER, content=content))
                 elif isinstance(part, TextPart):
-                    msgs.append(TextMessage(role=MessageRole.MODEL, content=part.content))
+                    content = part.content[0] if isinstance(part.content, list) else part.content
+                    msgs.append(TextMessage(role=MessageRole.MODEL, content=content))
                 elif isinstance(part, SystemPromptPart):
-                    msgs.append(TextMessage(role=MessageRole.SYSTEM, content=part.content))
+                    content = part.content[0] if isinstance(part.content, list) else part.content
+                    msgs.append(TextMessage(role=MessageRole.SYSTEM, content=content))
                 elif isinstance(part, ToolCallPart):
                     msgs.append(ToolCallMessage(
                         role=MessageRole.TOOL_CALL,
@@ -288,13 +291,14 @@ class AgentManager:
                 )
                 
                 usage = result.usage()
+                history = self.convert_history_to_msgs(result.all_messages()) if payload.include_history else None
                 return AgentResponse(
                     output=result.output, 
                     usage=AgentResponseUsage(
                         input_tokens=usage.input_tokens,
                         output_tokens=usage.output_tokens,
                     ),
-                    history=self.convert_history_to_msgs(result.all_messages()) if payload.include_history else None
+                    history=history
                 )
 
     async def safe_run(
