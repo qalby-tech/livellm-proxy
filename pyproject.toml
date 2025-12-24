@@ -10,13 +10,12 @@ dependencies = [
     "logfire[fastapi]>=4.13.2",
     "numpy>=2.3.4",
     "pydantic>=2.12.0",
-    "pydantic-ai-slim[anthropic,google,groq,mcp,openai]>=1.1.0",
     "scipy>=1.16.3",
     "audioop-lts; python_version>='3.13'",
     "pydantic-settings>=2.11.0",
     "openai-agents>=0.5.0",
+    "pydantic-ai-slim[anthropic,google,groq,mcp,openai]>=1.39.0",
 ]
-
 [project.optional-dependencies]
 testing = [
     "pytest>=8.4.2",
