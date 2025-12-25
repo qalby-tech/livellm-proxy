@@ -8,6 +8,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import base64
 import logfire
+from urllib.parse import urlparse, quote, urlunparse
 
 
 class RedisManager:
@@ -15,15 +16,68 @@ class RedisManager:
     
     PROVIDERS_KEY = "livellm:providers"
     
+    @staticmethod
+    def _safe_encode_redis_url(redis_url: str) -> str:
+        """
+        Safely encode Redis URL credentials to handle special characters.
+        
+        Args:
+            redis_url: Redis URL that may contain special characters in password
+            
+        Returns:
+            URL with properly encoded credentials
+        """
+        try:
+            parsed = urlparse(redis_url)
+            
+            # If there are credentials, encode them
+            if parsed.username or parsed.password:
+                # Encode username and password
+                username = quote(parsed.username, safe='') if parsed.username else ''
+                password = quote(parsed.password, safe='') if parsed.password else ''
+                
+                # Reconstruct netloc with encoded credentials
+                if username and password:
+                    netloc = f"{username}:{password}@{parsed.hostname}"
+                elif password:
+                    netloc = f":{password}@{parsed.hostname}"
+                else:
+                    netloc = f"{username}@{parsed.hostname}"
+                
+                # Add port if present
+                if parsed.port:
+                    netloc = f"{netloc}:{parsed.port}"
+                
+                # Reconstruct the URL
+                encoded_url = urlunparse((
+                    parsed.scheme,
+                    netloc,
+                    parsed.path,
+                    parsed.params,
+                    parsed.query,
+                    parsed.fragment
+                ))
+                
+                return encoded_url
+            
+            # No credentials, return as-is
+            return redis_url
+            
+        except Exception as e:
+            logfire.warn(f"Failed to parse Redis URL for encoding: {e}. Using original URL.")
+            return redis_url
+    
     def __init__(self, redis_url: Optional[str] = None, encryption_salt: Optional[str] = None):
         """
         Initialize Redis manager with optional encryption.
         
         Args:
-            redis_url: Redis connection URL (e.g., "redis://localhost:6379/0")
+            redis_url: Redis connection URL (e.g., "redis://localhost:6379/0" or "redis://:password@host:port/db")
+                      Passwords with special characters will be automatically URL-encoded
             encryption_salt: Salt for encryption key derivation
         """
-        self.redis_url = redis_url
+        # Safely encode the Redis URL if provided
+        self.redis_url = self._safe_encode_redis_url(redis_url) if redis_url else None
         self.encryption_salt = encryption_salt
         self.redis_client: Optional[redis.Redis] = None
         self.cipher: Optional[Fernet] = None
