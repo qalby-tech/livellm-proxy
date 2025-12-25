@@ -29,7 +29,7 @@ async def config(request: Settings, config_manager: ConfigManagerType) -> Succes
         request: Provider configuration including uid, provider type, api_key, and optional base_url
     """
     try:
-        config_manager.add_config(request)
+        await config_manager.add_config(request)
         return SuccessResponse()
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -43,7 +43,7 @@ async def delete_config(uid: str, config_manager: ConfigManagerType) -> SuccessR
         uid: The unique identifier of the provider configuration to delete
     """
     try:
-        config_manager.delete_config(uid)
+        await config_manager.delete_config(uid)
         return SuccessResponse()
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

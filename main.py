@@ -8,6 +8,7 @@ from managers.config import ConfigManager
 from managers.fallback import FallbackManager
 from managers.ws import WsManager
 from managers.transcription_rt import TranscriptionRTManager
+from managers.redis import RedisManager
 from routers.agent import agent_router
 from routers.audio import audio_router
 from routers.providers import providers_router
@@ -26,12 +27,26 @@ class EnvSettings(BaseSettings):
     otel_exporter_otlp_endpoint: Optional[str] = Field(None, description="OTEL exporter otlp endpoint")
     host: str = Field("0.0.0.0", description="Host")
     port: int = Field(8000, description="Port")
+    redis_url: Optional[str] = Field(None, description="Redis URL for provider settings storage")
+    redis_encryption_salt: Optional[str] = Field(None, description="Salt for encrypting Redis data")
 
 env_settings = EnvSettings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.config_manager = ConfigManager()
+    # Initialize Redis manager
+    app.state.redis_manager = RedisManager(
+        redis_url=env_settings.redis_url,
+        encryption_salt=env_settings.redis_encryption_salt
+    )
+    await app.state.redis_manager.connect()
+    
+    # Initialize config manager with Redis support
+    app.state.config_manager = ConfigManager(redis_manager=app.state.redis_manager)
+    
+    # Load provider configurations from Redis
+    await app.state.config_manager.load_providers_from_redis()
+    
     app.state.fallback_manager = FallbackManager()
     app.state.agent_manager = AgentManager(
         config_manager=app.state.config_manager, 
@@ -49,6 +64,9 @@ async def lifespan(app: FastAPI):
         audio_manager=app.state.audio_manager
     )
     yield
+    
+    # Cleanup: disconnect from Redis
+    await app.state.redis_manager.disconnect()
 
 
 app = FastAPI(lifespan=lifespan, root_path="/livellm")

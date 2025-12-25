@@ -1,6 +1,7 @@
 from typing import Dict, Union, TypeAlias, Optional, Tuple
 from models.common import Settings
 from models.common import ProviderKind
+import logfire
 
 # providers
 from openai import AsyncOpenAI
@@ -14,14 +15,42 @@ ProviderClient: TypeAlias = Union[AsyncOpenAI, genai.Client, AsyncAnthropic, Asy
 
 class ConfigManager:
 
-    def __init__(self):
+    def __init__(self, redis_manager=None):
         self.configs: Dict[str, Settings] = {} # config_id: Settings
         self.providers: Dict[str, ProviderClient] = {} # provider_id: provider kind's client instance
+        self.redis_manager = redis_manager
     
 
-    def add_config(self, config: Settings):
+    async def load_providers_from_redis(self):
+        """Load all provider configurations from Redis on startup"""
+        if not self.redis_manager:
+            return
+        
+        all_settings = await self.redis_manager.load_all_provider_settings()
+        for uid, settings_dict in all_settings.items():
+            try:
+                # Reconstruct Settings object from dictionary
+                settings = Settings(**settings_dict)
+                self.configs[uid] = settings
+                self.providers[uid] = self.create_provider_client(settings)
+            except Exception as e:
+                logfire.error(f"Failed to load provider {uid} from Redis: {e}")
+    
+    async def add_config(self, config: Settings):
+        """Add provider configuration and persist to Redis"""
         self.configs[config.uid] = config
         self.providers[config.uid] = self.create_provider_client(config)
+        
+        # Persist to Redis if available
+        if self.redis_manager:
+            # Manually serialize to include the actual secret values
+            settings_dict = config.model_dump(mode='json')
+            # Replace the masked api_key with the actual secret value
+            settings_dict['api_key'] = config.api_key.get_secret_value()
+            await self.redis_manager.save_provider_settings(
+                config.uid, 
+                settings_dict
+            )
     
     def get_config_client(self, uid: str, model: str) -> Optional[ProviderClient]:
         if uid not in self.configs:
@@ -48,11 +77,16 @@ class ConfigManager:
         provider_kind: ProviderKind = self.get_config_provider(uid)
         return provider_kind, provider_client
     
-    def delete_config(self, uid: str):
+    async def delete_config(self, uid: str):
+        """Delete provider configuration and remove from Redis"""
         if uid not in self.configs:
             raise ValueError(f"Config {uid} not found")
         self.configs.pop(uid)
         self.providers.pop(uid)
+        
+        # Remove from Redis if available
+        if self.redis_manager:
+            await self.redis_manager.delete_provider_settings(uid)
     
     def create_provider_client(self, settings: Settings) -> ProviderClient:
         # Extract the actual API key from SecretStr
