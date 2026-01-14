@@ -35,7 +35,7 @@ async def agent_run(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logfire.error(f"Unexpected error in agent_run: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
 @agent_router.post("/run_stream")
 async def agent_run_stream(
@@ -65,4 +65,4 @@ async def agent_run_stream(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logfire.error(f"Unexpected error in agent_run_stream: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")

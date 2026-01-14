@@ -47,7 +47,7 @@ async def audio_speak(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logfire.error(f"Unexpected error in audio_speak: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
 
 @audio_router.post("/speak_stream", response_class=Response)
@@ -78,7 +78,7 @@ async def audio_speak_stream(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logfire.error(f"Unexpected error in audio_speak_stream: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
 @audio_router.post("/transcribe")
 async def audio_transcribe(
@@ -176,5 +176,5 @@ async def audio_transcribe_json(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logfire.error(f"Unexpected error in audio_transcribe_json: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
