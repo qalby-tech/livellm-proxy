@@ -29,6 +29,12 @@ class PingFilter(logging.Filter):
         message = record.getMessage()
         return "/ping" not in message
 
+def scrubbing_callback(m: logfire.ScrubMatch):
+    if (
+        m.path == ('message', 'e')
+        or m.path == ('attributes', 'e')
+    ):
+        return m.value
 
 class EnvSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -87,7 +93,12 @@ app.include_router(transcription_ws_router)
 
 # configure logfire
 os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = env_settings.otel_exporter_otlp_endpoint or ""
-logfire.configure(service_name="livellm-proxy", send_to_logfire="if-token-present", token=env_settings.logfire_write_token)
+logfire.configure(
+    service_name="livellm-proxy", 
+    send_to_logfire="if-token-present", 
+    token=env_settings.logfire_write_token,
+    scrubbing=logfire.ScrubbingOptions(callback=scrubbing_callback)
+    )
 
 # Set up Logfire as a logging sink for standard library logging
 logfire_handler = logfire.LogfireLoggingHandler()
