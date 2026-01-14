@@ -1,4 +1,5 @@
 import os
+import logging
 from fastapi import FastAPI
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -19,6 +20,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 
 import logfire
+from logging import basicConfig
+
+
+class PingFilter(logging.Filter):
+    """Filter out /ping health check requests from access logs."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        return "/ping" not in message
 
 
 class EnvSettings(BaseSettings):
@@ -79,6 +88,15 @@ app.include_router(transcription_ws_router)
 # configure logfire
 os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = env_settings.otel_exporter_otlp_endpoint or ""
 logfire.configure(service_name="livellm-proxy", send_to_logfire="if-token-present", token=env_settings.logfire_write_token)
+
+# Set up Logfire as a logging sink for standard library logging
+logfire_handler = logfire.LogfireLoggingHandler()
+basicConfig(handlers=[logfire_handler], level=logging.INFO)
+
+# Filter out /ping health check requests from uvicorn access logs
+uvicorn_access_logger = logging.getLogger("uvicorn.access")
+uvicorn_access_logger.addFilter(PingFilter())
+
 logfire.instrument_pydantic_ai()
 logfire.instrument_mcp()
 logfire.instrument_fastapi(app, capture_headers=True, excluded_urls=["/ping"])
