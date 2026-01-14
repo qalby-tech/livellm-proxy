@@ -114,6 +114,7 @@ class RedisManager:
             await self.redis_client.ping()
             logfire.info("Successfully connected to Redis")
         except Exception as e:
+            print(f"Failed to connect to Redis: {e}")
             logfire.error(f"Failed to connect to Redis: {e}")
             self.enabled = False
             self.redis_client = None
