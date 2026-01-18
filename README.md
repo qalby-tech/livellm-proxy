@@ -9,6 +9,7 @@ A unified FastAPI proxy server for AI services (LLMs and Audio) with built-in fa
 - 🎙️ **Real-Time Transcription**: WebSocket-based live audio transcription with bidirectional streaming
 - 🔄 **Intelligent Fallback**: Automatic failover between providers
 - 🛠️ **MCP Tools**: Support for web search and MCP streamable servers
+- 📐 **Structured Output**: Force models to return JSON matching a custom schema
 - 📊 **Observability**: Built-in logging with Logfire
 - 🚀 **Streaming Support**: Both streaming and non-streaming responses
 
@@ -454,6 +455,7 @@ Content-Type: application/json
 - `tools` (optional): Array of tools to enable (web search, MCP servers)
 - `gen_config` (optional): Model-specific generation config (temperature, max_tokens, etc.)
 - `include_history` (optional, default: `false`): Include full conversation history in response
+- `output_schema` (optional): JSON schema for structured output (see [Structured Output](#structured-output))
 
 **Fallback Request (Sequential):**
 ```json
@@ -720,7 +722,7 @@ Tries all providers simultaneously and returns the first successful response.
 ```
 
 **Response Fields:**
-- `output` (string): The generated response text
+- `output` (string): The generated response text (or JSON string when using `output_schema`)
 - `usage` (object): Token usage statistics
   - `input_tokens` (int): Number of input tokens used
   - `output_tokens` (int): Number of output tokens used
@@ -728,6 +730,220 @@ Tries all providers simultaneously and returns the first successful response.
   - Only included when `include_history: true` in the request
   - Contains all messages exchanged during the conversation
   - Useful for maintaining conversation state across requests
+
+## Structured Output
+
+The `output_schema` parameter allows you to define a JSON schema that the model must follow when generating responses. When provided, the agent will return a JSON string matching the specified schema.
+
+### OutputSchema Model
+
+```json
+{
+  "title": "SchemaName",
+  "description": "Optional description to help the model",
+  "properties": {
+    "field_name": {
+      "type": "string",
+      "description": "Field description"
+    }
+  },
+  "required": ["field_name"]
+}
+```
+
+**OutputSchema Fields:**
+- `title` (required): Name of the schema, used as the output tool name
+- `description` (optional): Description to help the model understand what to output
+- `properties` (required): Dictionary of property definitions
+- `required` (optional): List of required property names
+- `additionalProperties` (optional): Whether extra properties are allowed
+
+### Property Definition
+
+Each property in `properties` can have:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string/array | Property type: `string`, `integer`, `number`, `boolean`, `array`, `object`, `null` |
+| `description` | string | Description of the property |
+| `enum` | array | Allowed values for the property |
+| `default` | any | Default value |
+| `minLength` / `maxLength` | int | String length constraints |
+| `pattern` | string | Regex pattern for string validation |
+| `minimum` / `maximum` | number | Number value constraints |
+| `exclusiveMinimum` / `exclusiveMaximum` | number | Exclusive number constraints |
+| `items` | object | Schema for array items |
+| `minItems` / `maxItems` | int | Array length constraints |
+| `uniqueItems` | bool | Whether array items must be unique |
+| `properties` | object | Nested object properties |
+| `required` | array | Required properties for nested objects |
+| `additionalProperties` | bool/object | Schema for additional properties |
+
+### Example: Extract Person Information
+
+**Request:**
+```json
+{
+  "provider_uid": "openai-1",
+  "model": "gpt-4",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Extract info: John Doe is a 28-year-old software engineer from New York."
+    }
+  ],
+  "tools": [],
+  "output_schema": {
+    "title": "Person",
+    "description": "A person's information extracted from text",
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "The person's full name"
+      },
+      "age": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 150,
+        "description": "The person's age in years"
+      },
+      "occupation": {
+        "type": "string",
+        "description": "The person's job or profession"
+      },
+      "location": {
+        "type": "string",
+        "description": "The person's city or location"
+      }
+    },
+    "required": ["name", "age"]
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "output": "{\"name\": \"John Doe\", \"age\": 28, \"occupation\": \"software engineer\", \"location\": \"New York\"}",
+  "usage": {
+    "input_tokens": 85,
+    "output_tokens": 25
+  }
+}
+```
+
+### Example: Extract List of Items
+
+**Request:**
+```json
+{
+  "provider_uid": "openai-1",
+  "model": "gpt-4",
+  "messages": [
+    {
+      "role": "user",
+      "content": "List the fruits mentioned: I bought apples, oranges, and bananas at the store."
+    }
+  ],
+  "tools": [],
+  "output_schema": {
+    "title": "FruitList",
+    "description": "A list of fruits extracted from text",
+    "properties": {
+      "fruits": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "List of fruit names"
+      },
+      "count": {
+        "type": "integer",
+        "description": "Total number of fruits"
+      }
+    },
+    "required": ["fruits", "count"]
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "output": "{\"fruits\": [\"apples\", \"oranges\", \"bananas\"], \"count\": 3}",
+  "usage": {
+    "input_tokens": 72,
+    "output_tokens": 18
+  }
+}
+```
+
+### Example: Nested Objects
+
+**Request:**
+```json
+{
+  "provider_uid": "openai-1",
+  "model": "gpt-4",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Parse this order: Order #12345 for customer Jane Smith, 2 items: iPhone ($999) and AirPods ($199)"
+    }
+  ],
+  "tools": [],
+  "output_schema": {
+    "title": "Order",
+    "description": "An e-commerce order",
+    "properties": {
+      "order_id": {
+        "type": "string",
+        "description": "The order identifier"
+      },
+      "customer": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string"}
+        },
+        "required": ["name"]
+      },
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {"type": "string"},
+            "price": {"type": "number"}
+          },
+          "required": ["name", "price"]
+        }
+      },
+      "total": {
+        "type": "number",
+        "description": "Total order amount"
+      }
+    },
+    "required": ["order_id", "customer", "items"]
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "output": "{\"order_id\": \"12345\", \"customer\": {\"name\": \"Jane Smith\"}, \"items\": [{\"name\": \"iPhone\", \"price\": 999}, {\"name\": \"AirPods\", \"price\": 199}], \"total\": 1198}",
+  "usage": {
+    "input_tokens": 120,
+    "output_tokens": 45
+  }
+}
+```
+
+### Streaming with Structured Output
+
+Structured output also works with the streaming endpoint (`/livellm/agent/run_stream`). Each streamed chunk will contain a partial or complete JSON string as it's being generated.
+
+**Note:** Streaming structured output requires model support for streaming tool arguments. Some models (like Gemini) may not support this feature.
 
 ## Environment Variables
 

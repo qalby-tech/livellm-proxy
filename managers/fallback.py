@@ -60,6 +60,7 @@ class FallbackManager:
                 logfire.warning(f"Request {request} failed: {e}")
                 continue
         logfire.error("All requests failed")
+        raise RuntimeError("All requests failed")
     
     async def execute_parallel(self, requests: List[BaseRequest], executor: Executor, timeout: int = 360) -> Any:
         """
@@ -107,6 +108,7 @@ class FallbackManager:
         
         # All tasks completed but all failed
         logfire.error("All parallel executors failed")
+        raise RuntimeError("All parallel requests failed")
     
 
     async def catch(self, request: FallbackRequest, executor: Executor) -> Any:

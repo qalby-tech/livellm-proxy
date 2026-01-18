@@ -1,5 +1,6 @@
-from pydantic_ai import Agent
-from typing import Optional, List, Union, Tuple, AsyncIterator
+from pydantic_ai import Agent, StructuredDict
+from typing import Any, Optional, List, Union, Tuple, AsyncIterator
+import json
 
 # tools
 from pydantic_ai import WebSearchTool
@@ -24,7 +25,7 @@ from pydantic_ai.providers.groq import GroqProvider
 from models.common import ProviderKind
 from models.agent.tools import WebSearchInput, MCPStreamableServerInput, ToolKind, ToolInput
 from models.agent.chat import MessageRole, TextMessage, BinaryMessage, ToolCallMessage, ToolReturnMessage
-from models.agent.agent import AgentRequest, AgentResponse, AgentResponseUsage
+from models.agent.agent import AgentRequest, AgentResponse, AgentResponseUsage, OutputSchema
 from models.fallback import AgentFallbackRequest
 from managers.config import ConfigManager
 from managers.fallback import FallbackManager
@@ -170,36 +171,76 @@ class AgentManager:
         history: List[Union[ModelMessage, ModelResponse]],
         builtin_tools: List,
         mcp_servers: List,
-        include_history: bool = False
+        include_history: bool = False,
+        output_schema: Optional[OutputSchema] = None
     ) -> AsyncIterator[AgentResponse]:
         """Internal generator that properly manages the streaming context"""
-        async with self.agent:
-            async with self.agent.run_stream(
-                model=model,
-                user_prompt=prompt,
-                message_history=history,
-                builtin_tools=builtin_tools,
-                toolsets=mcp_servers
-            ) as stream_response:
-                async for text in stream_response.stream_output(debounce_by=None):
+        # Handle structured output with custom JSON schema
+        if output_schema:
+            schema_dict = output_schema.to_json_schema()
+            output_type = StructuredDict(
+                schema_dict,
+                name=output_schema.title,
+                description=output_schema.description
+            )
+            structured_agent: Agent[None, dict[str, Any]] = Agent(output_type=output_type)
+            async with structured_agent:
+                async with structured_agent.run_stream(
+                    model=model,
+                    user_prompt=prompt,
+                    message_history=history,
+                    builtin_tools=builtin_tools,
+                    toolsets=mcp_servers
+                ) as stream_response:
+                    async for output_dict in stream_response.stream_output(debounce_by=None):
+                        usage = stream_response.usage()
+                        # Convert dict output to JSON string
+                        output_json = json.dumps(output_dict, ensure_ascii=False) if output_dict else ""
+                        yield AgentResponse(
+                            output=output_json,
+                            usage=AgentResponseUsage(
+                                input_tokens=usage.input_tokens,
+                                output_tokens=usage.output_tokens,
+                            )
+                        )
+                    # Final chunk with complete usage statistics
                     usage = stream_response.usage()
                     yield AgentResponse(
-                        output=text,
+                        output="",
                         usage=AgentResponseUsage(
                             input_tokens=usage.input_tokens,
                             output_tokens=usage.output_tokens,
-                        )
+                        ),
+                        history=self.convert_history_to_msgs(stream_response.all_messages()) if include_history else None
                     )
-                # Final chunk with complete usage statistics
-                usage = stream_response.usage()
-                yield AgentResponse(
-                    output="",
-                    usage=AgentResponseUsage(
-                        input_tokens=usage.input_tokens,
-                        output_tokens=usage.output_tokens,
-                    ),
-                    history=self.convert_history_to_msgs(stream_response.all_messages()) if include_history else None
-                )
+        else:
+            async with self.agent:
+                async with self.agent.run_stream(
+                    model=model,
+                    user_prompt=prompt,
+                    message_history=history,
+                    builtin_tools=builtin_tools,
+                    toolsets=mcp_servers
+                ) as stream_response:
+                    async for text in stream_response.stream_output(debounce_by=None):
+                        usage = stream_response.usage()
+                        yield AgentResponse(
+                            output=text,
+                            usage=AgentResponseUsage(
+                                input_tokens=usage.input_tokens,
+                                output_tokens=usage.output_tokens,
+                            )
+                        )
+                    # Final chunk with complete usage statistics
+                    usage = stream_response.usage()
+                    yield AgentResponse(
+                        output="",
+                        usage=AgentResponseUsage(
+                            input_tokens=usage.input_tokens,
+                            output_tokens=usage.output_tokens,
+                        ),
+                        history=self.convert_history_to_msgs(stream_response.all_messages()) if include_history else None
+                    )
     
     async def _validated_stream_generator(
         self,
@@ -208,7 +249,8 @@ class AgentManager:
         history: List[Union[ModelMessage, ModelResponse]],
         builtin_tools: List,
         mcp_servers: List,
-        include_history: bool = False
+        include_history: bool = False,
+        output_schema: Optional[OutputSchema] = None
     ) -> AsyncIterator[AgentResponse]:
         """
         Validates first token generation before returning the stream.
@@ -220,7 +262,8 @@ class AgentManager:
             history=history,
             builtin_tools=builtin_tools,
             mcp_servers=mcp_servers,
-            include_history=include_history
+            include_history=include_history,
+            output_schema=output_schema
         )
         
         # Get the first chunk to validate the stream works
@@ -278,28 +321,60 @@ class AgentManager:
                 history=history,
                 builtin_tools=builtin_tools,
                 mcp_servers=mcp_servers,
-                include_history=payload.include_history
+                include_history=payload.include_history,
+                output_schema=payload.output_schema
             )
         else:
-            async with self.agent:
-                result = await self.agent.run(
-                    model=model,
-                    user_prompt=prompt,
-                    message_history=history,
-                    builtin_tools=builtin_tools,
-                    toolsets=mcp_servers
+            # Handle structured output with custom JSON schema
+            if payload.output_schema:
+                schema_dict = payload.output_schema.to_json_schema()
+                output_type = StructuredDict(
+                    schema_dict,
+                    name=payload.output_schema.title,
+                    description=payload.output_schema.description
                 )
-                
-                usage = result.usage()
-                history = self.convert_history_to_msgs(result.all_messages()) if payload.include_history else None
-                return AgentResponse(
-                    output=result.output, 
-                    usage=AgentResponseUsage(
-                        input_tokens=usage.input_tokens,
-                        output_tokens=usage.output_tokens,
-                    ),
-                    history=history
-                )
+                structured_agent: Agent[None, dict[str, Any]] = Agent(output_type=output_type)
+                async with structured_agent:
+                    result = await structured_agent.run(
+                        model=model,
+                        user_prompt=prompt,
+                        message_history=history,
+                        builtin_tools=builtin_tools,
+                        toolsets=mcp_servers
+                    )
+                    
+                    usage = result.usage()
+                    history_msgs = self.convert_history_to_msgs(result.all_messages()) if payload.include_history else None
+                    # Convert dict output to JSON string
+                    output_json = json.dumps(result.output, ensure_ascii=False)
+                    return AgentResponse(
+                        output=output_json, 
+                        usage=AgentResponseUsage(
+                            input_tokens=usage.input_tokens,
+                            output_tokens=usage.output_tokens,
+                        ),
+                        history=history_msgs
+                    )
+            else:
+                async with self.agent:
+                    result = await self.agent.run(
+                        model=model,
+                        user_prompt=prompt,
+                        message_history=history,
+                        builtin_tools=builtin_tools,
+                        toolsets=mcp_servers
+                    )
+                    
+                    usage = result.usage()
+                    history_msgs = self.convert_history_to_msgs(result.all_messages()) if payload.include_history else None
+                    return AgentResponse(
+                        output=result.output, 
+                        usage=AgentResponseUsage(
+                            input_tokens=usage.input_tokens,
+                            output_tokens=usage.output_tokens,
+                        ),
+                        history=history_msgs
+                    )
 
     async def safe_run(
         self,
