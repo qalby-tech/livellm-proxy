@@ -6,7 +6,7 @@ from audio_ai.base import AudioAIService
 from audio_ai.base import AudioRealtimeTranscriptionService
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse
 from typing import Optional, AsyncIterator, Awaitable, Callable
-from models.audio.transcription_ws import TranscriptionWsResponse
+# from models.audio.transcription_ws import TranscriptionWsResponse
 import numpy as np
 from agents.voice.models.openai_stt import OpenAISTTModel, STTModelSettings
 from agents.voice.input import StreamedAudioInput

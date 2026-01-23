@@ -301,14 +301,39 @@ class AgentManager:
             gen_config=payload.gen_config
         )
         
-        # Create the user prompt from the last message
-        prompt = payload.messages[-1]
-        if prompt.role != MessageRole.USER:
+        # Validate that last message is from user
+        if payload.messages[-1].role != MessageRole.USER:
             raise ValueError("Last message must be from user")
+        
+        # Convert all messages
         converted_messages = self.convert_msgs(payload.messages)
-        prompt = [part.content if isinstance(part, UserPromptPart) else part 
-                for part in converted_messages[-1].parts]
-        history = converted_messages[:-1]
+        
+        # Find all consecutive user messages from the end
+        # User messages are ModelRequest with UserPromptPart or BinaryContent parts
+        user_messages = []
+        for msg in reversed(converted_messages):
+            if isinstance(msg, ModelRequest) and any(
+                isinstance(p, (UserPromptPart, BinaryContent)) for p in msg.parts
+            ):
+                user_messages.insert(0, msg)
+            else:
+                break
+        
+        if not user_messages:
+            raise ValueError("No user messages found")
+        
+        # Combine all user message parts into a single prompt list
+        # This ensures BinaryContent stays in user_prompt, not in message_history
+        prompt = []
+        for msg in user_messages:
+            for part in msg.parts:
+                if isinstance(part, UserPromptPart):
+                    prompt.append(part.content)
+                elif isinstance(part, BinaryContent):
+                    prompt.append(part)
+        
+        # History is everything except the user messages we just extracted
+        history = converted_messages[:-len(user_messages)]
         # Setup builtin tools
         builtin_tools, mcp_servers = self.create_tools(payload.tools)
         

@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, field_validator
 from models.audio.speak import SpeakMimeType
 from typing import Optional
+from datetime import datetime
 import base64
 
 class TranscriptionInitWsRequest(BaseModel):
@@ -30,3 +31,4 @@ class TranscriptionAudioChunkWsRequest(BaseModel):
 
 class TranscriptionWsResponse(BaseModel):
     transcription: str = Field(..., description="The transcription")
+    received_at: datetime = Field(default_factory=datetime.now, description="The datetime when the transcription was received")

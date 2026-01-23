@@ -10,6 +10,7 @@ from models.audio.transcription_ws import (
 from models.ws import WsResponse, WsAction, WsStatus
 from typing import AsyncIterator
 from starlette.websockets import WebSocketState
+from datetime import datetime
 import logfire
 
 
@@ -101,7 +102,8 @@ async def transcription_websocket_endpoint(
             return
         try:
             response = TranscriptionWsResponse(
-                transcription=transcription
+                transcription=transcription,
+                received_at=datetime.now()
             )
             await websocket.send_json(response.model_dump())
         except WebSocketException as e:
