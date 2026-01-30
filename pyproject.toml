@@ -17,6 +17,7 @@ dependencies = [
     "pydantic-ai-slim[anthropic,google,groq,mcp,openai]>=1.39.0",
     "cryptography>=46.0.3",
     "redis[hiredis]>=7.1.0",
+    "aiofiles>=23.2.1",
 ]
 [dependency-groups]
 dev = [

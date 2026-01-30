@@ -10,6 +10,7 @@ from managers.fallback import FallbackManager
 from managers.ws import WsManager
 from managers.transcription_rt import TranscriptionRTManager
 from managers.redis import RedisManager
+from managers.file_store import FileStoreManager
 from routers.agent import agent_router
 from routers.audio import audio_router
 from routers.providers import providers_router
@@ -43,24 +44,33 @@ class EnvSettings(BaseSettings):
     host: str = Field("0.0.0.0", description="Host")
     port: int = Field(8000, description="Port")
     redis_url: Optional[str] = Field(None, description="Redis URL for provider settings storage")
-    redis_encryption_salt: Optional[str] = Field(None, description="Salt for encrypting Redis data")
+    encryption_salt: Optional[str] = Field(None, description="Salt for encrypting data. If not provided, data will be stored unencrypted.")
+    file_storage_path: str = Field("/data/providers.json", description="Path to file storage for provider settings")
 
 env_settings = EnvSettings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize Redis manager
-    app.state.redis_manager = RedisManager(
-        redis_url=env_settings.redis_url,
-        encryption_salt=env_settings.redis_encryption_salt
-    )
-    await app.state.redis_manager.connect()
+    # Initialize persistence manager
+    if env_settings.redis_url:
+        app.state.persistence_manager = RedisManager(
+            redis_url=env_settings.redis_url,
+            encryption_salt=env_settings.encryption_salt
+        )
+        await app.state.persistence_manager.connect()
+        logfire.info("Using Redis for persistence")
+    else:
+        app.state.persistence_manager = FileStoreManager(
+            file_path=env_settings.file_storage_path,
+            encryption_salt=env_settings.encryption_salt
+        )
+        logfire.info(f"Using File Storage for persistence at {env_settings.file_storage_path}")
     
-    # Initialize config manager with Redis support
-    app.state.config_manager = ConfigManager(redis_manager=app.state.redis_manager)
+    # Initialize config manager with persistence support
+    app.state.config_manager = ConfigManager(persistence_manager=app.state.persistence_manager)
     
-    # Load provider configurations from Redis
-    await app.state.config_manager.load_providers_from_redis()
+    # Load provider configurations from persistence
+    await app.state.config_manager.load_providers_from_persistence()
     
     app.state.fallback_manager = FallbackManager()
     app.state.agent_manager = AgentManager(
@@ -80,8 +90,9 @@ async def lifespan(app: FastAPI):
     )
     yield
     
-    # Cleanup: disconnect from Redis
-    await app.state.redis_manager.disconnect()
+    # Cleanup: disconnect from persistence if needed
+    if hasattr(app.state.persistence_manager, 'disconnect'):
+        await app.state.persistence_manager.disconnect()
 
 
 app = FastAPI(lifespan=lifespan, root_path="/livellm")
