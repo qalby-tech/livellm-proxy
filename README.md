@@ -14,6 +14,7 @@ A unified FastAPI proxy server for AI services (LLMs and Audio) with built-in fa
 - 📊 **Observability**: Built-in logging with Logfire
 - 🚀 **Streaming Support**: Both streaming and non-streaming responses
 - 🔐 **Encrypted Storage**: Optional encryption for provider configurations (Redis or file-based)
+- 🔃 **Storage Reconciliation**: Automatic sync between file storage and Redis for seamless backend transitions
 
 ## Installation
 
@@ -1041,6 +1042,45 @@ System prompts are **always preserved** during context overflow handling:
 
 A 20% overhead buffer is applied to all token calculations to account for potential tiktoken inaccuracies. This can be configured via the `TOKEN_COUNT_OVERHEAD` environment variable.
 
+## Storage Reconciliation
+
+The proxy supports automatic reconciliation between file storage and Redis to handle seamless transitions between storage backends and protect against data loss.
+
+### How It Works
+
+| Event | Behavior |
+|-------|----------|
+| **Startup (Redis mode)** | Migrates settings from file storage → Redis (new keys only, Redis takes precedence) |
+| **Shutdown (Redis mode)** | Backs up all Redis settings → file storage |
+
+### When You Need This
+
+1. **Switching from file storage to Redis**: When you add `REDIS_URL` to your configuration, existing provider settings in file storage are automatically migrated to Redis on the next startup.
+
+2. **Redis failure recovery**: If Redis becomes unavailable and you need to fall back to file storage, your settings are already backed up in the file storage path from the last shutdown.
+
+3. **Multi-instance deployments**: When scaling to multiple instances with shared Redis, the first instance to start will reconcile any local file settings into Redis.
+
+### When to Disable
+
+Set `ENABLE_STORAGE_RECONCILIATION=false` to disable this feature if:
+
+- **Performance-critical startup**: You have many provider configurations and want faster cold starts
+- **Read-only file system**: Your container/environment has a read-only file system and can't write backups
+- **Dedicated Redis**: You're confident in your Redis reliability and don't need file backups
+- **Avoiding conflicts**: You're running multiple instances and want to prevent reconciliation races (though Redis keys take precedence, so this is generally safe)
+
+### Configuration
+
+```bash
+# Enable/disable storage reconciliation (default: true)
+ENABLE_STORAGE_RECONCILIATION=true
+```
+
+**Notes:**
+- File storage path is fixed at `data/providers.json` and cannot be changed
+- Both file storage and Redis use the same `ENCRYPTION_SALT` for encryption consistency during reconciliation
+
 ## Environment Variables
 
 ```bash
@@ -1053,13 +1093,16 @@ LOGFIRE_WRITE_TOKEN=your-token
 OTEL_EXPORTER_OTLP_ENDPOINT=your-endpoint
 
 # Persistence Configuration
-# If REDIS_URL is provided, uses Redis; otherwise uses file storage
+# If REDIS_URL is provided, uses Redis; otherwise uses file storage at data/providers.json
 REDIS_URL=redis://localhost:6379/0
-FILE_STORAGE_PATH=/data/providers.json
 
 # Encryption Salt (optional, applies to both Redis and File storage)
 # If not provided, data is stored unencrypted
 ENCRYPTION_SALT=your-random-salt-string
+
+# Storage Reconciliation (default: true)
+# Enable/disable automatic sync between file storage and Redis
+ENABLE_STORAGE_RECONCILIATION=true
 
 # Context Overflow Configuration
 # Safety overhead multiplier for tiktoken token counting (default: 1.20 = 20% buffer)

@@ -210,7 +210,16 @@ class RedisManager:
             for uid_bytes, encrypted_data in all_data.items():
                 try:
                     uid = uid_bytes.decode() if isinstance(uid_bytes, bytes) else uid_bytes
+                    
+                    if not encrypted_data:
+                        logfire.warn(f"Found empty settings data for uid {uid} in Redis, skipping")
+                        continue
+                        
                     json_data = self._decrypt(encrypted_data)
+                    if not json_data:
+                        logfire.warn(f"Decrypted data is empty for uid {uid}, skipping")
+                        continue
+
                     settings_dict = json.loads(json_data)
                     result[uid] = settings_dict
                 except Exception as e:

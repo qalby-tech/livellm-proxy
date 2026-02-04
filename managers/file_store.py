@@ -155,7 +155,15 @@ class FileStoreManager:
             result = {}
             for uid, encrypted_data in all_data.items():
                 try:
+                    if not encrypted_data:
+                        logfire.warn(f"Empty settings data for uid {uid} in file, skipping")
+                        continue
+
                     json_data = self._decrypt(encrypted_data)
+                    if not json_data:
+                        logfire.warn(f"Decrypted data is empty for uid {uid}, skipping")
+                        continue
+
                     settings_dict = json.loads(json_data)
                     result[uid] = settings_dict
                 except Exception as e:
