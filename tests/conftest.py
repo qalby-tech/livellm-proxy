@@ -1,6 +1,26 @@
 """Pytest configuration and fixtures for testing the FastAPI application."""
 
+import os
+import shutil
+import tempfile
+
+# Set test environment variables BEFORE importing the app
+# This is required because EnvSettings is evaluated at module import time
+_test_storage_dir = tempfile.mkdtemp(prefix="livellm_test_")
+os.environ["FILE_STORAGE_PATH"] = os.path.join(_test_storage_dir, "providers.json")
+
+import atexit
 import pytest
+
+
+def _cleanup_test_storage():
+    """Clean up temporary test storage directory."""
+    if os.path.exists(_test_storage_dir):
+        shutil.rmtree(_test_storage_dir, ignore_errors=True)
+
+
+# Register cleanup to run at process exit
+atexit.register(_cleanup_test_storage)
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, MagicMock
 from main import app

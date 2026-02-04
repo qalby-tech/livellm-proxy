@@ -1,6 +1,7 @@
 from pydantic_ai import Agent, StructuredDict
 from typing import Any, Optional, List, Union, Tuple, AsyncIterator
 import json
+import logfire
 
 # tools
 from pydantic_ai import WebSearchTool
@@ -25,10 +26,11 @@ from pydantic_ai.providers.groq import GroqProvider
 from models.common import ProviderKind
 from models.agent.tools import WebSearchInput, MCPStreamableServerInput, ToolKind, ToolInput
 from models.agent.chat import MessageRole, TextMessage, BinaryMessage, ToolCallMessage, ToolReturnMessage
-from models.agent.agent import AgentRequest, AgentResponse, AgentResponseUsage, OutputSchema
+from models.agent.agent import AgentRequest, AgentResponse, AgentResponseUsage, OutputSchema, ContextOverflowStrategy
 from models.fallback import AgentFallbackRequest
 from managers.config import ConfigManager
 from managers.fallback import FallbackManager
+from managers.context import ContextOverflowManager
 import base64
 
 
@@ -39,6 +41,7 @@ class AgentManager:
         self.config_manager = config_manager
         self.fallback_manager = fallback_manager
         self.agent = Agent[None, str]()
+        self.context_manager = ContextOverflowManager()
         
     def create_model(self, uid: str, model: str, gen_config: Optional[dict] = None):
         """Create a model using the cached provider"""
@@ -163,6 +166,210 @@ class AgentManager:
                         mime_type=part.media_type
                     ))
         return msgs
+    
+    def _extract_text_from_prompt(self, prompt: List[Union[str, BinaryContent]]) -> str:
+        """Extract all text content from a prompt list."""
+        text_parts = []
+        for item in prompt:
+            if isinstance(item, str):
+                text_parts.append(item)
+        return "\n".join(text_parts)
+    
+    def _apply_truncation_to_prompt(
+        self, 
+        prompt: List[Union[str, BinaryContent]], 
+        context_limit: int,
+        system_prompt: Optional[str] = None
+    ) -> List[Union[str, BinaryContent]]:
+        """
+        Apply truncation to text content in the prompt while preserving binary content.
+        System prompt is preserved and its tokens are excluded from the content limit.
+        """
+        # Separate text and binary content
+        text_parts = []
+        binary_parts = []
+        for item in prompt:
+            if isinstance(item, str):
+                text_parts.append(item)
+            elif isinstance(item, BinaryContent):
+                binary_parts.append(item)
+        
+        # Combine and truncate text (system prompt tokens are reserved)
+        combined_text = "\n".join(text_parts)
+        truncated_text = self.context_manager.truncate_text(
+            combined_text, context_limit, system_prompt=system_prompt
+        )
+        
+        # Rebuild prompt with truncated text and original binary content
+        new_prompt: List[Union[str, BinaryContent]] = [truncated_text]
+        new_prompt.extend(binary_parts)
+        return new_prompt
+    
+    def _extract_system_prompt(self, messages: List[Union[TextMessage, BinaryMessage, ToolCallMessage, ToolReturnMessage]]) -> Optional[str]:
+        """Extract the system prompt from the message list."""
+        for msg in messages:
+            if isinstance(msg, TextMessage) and msg.role == MessageRole.SYSTEM:
+                return msg.content
+        return None
+    
+    async def _run_with_recycle(
+        self,
+        payload: AgentRequest,
+        model,
+        prompt: List[Union[str, BinaryContent]],
+        history: List[Union[ModelMessage, ModelResponse]],
+        builtin_tools: List,
+        mcp_servers: List,
+        system_prompt: Optional[str] = None,
+    ) -> AgentResponse:
+        """
+        Run agent with recycle strategy for context overflow.
+        
+        Iteratively processes chunks of text, passing previous results
+        to be merged with new data. System prompt is preserved and excluded
+        from chunking calculations.
+        """
+        if not payload.output_schema:
+            raise ValueError("Recycle strategy requires output_schema to be set for merging results")
+        
+        # Use provided system prompt or extract from messages
+        if not system_prompt:
+            system_prompt = self._extract_system_prompt(payload.messages)
+        if not system_prompt:
+            system_prompt = "Generate a structured response based on the provided data."
+        
+        # Extract text content from prompt
+        text_content = self._extract_text_from_prompt(prompt)
+        
+        # Check if overflow handling is needed (considering system prompt)
+        if not self.context_manager.should_apply_overflow_handling(
+            text_content, payload.context_limit, system_prompt=system_prompt
+        ):
+            # No overflow, run normally
+            return await self._run_non_stream(payload, model, prompt, history, builtin_tools, mcp_servers)
+        
+        logfire.info(f"Context overflow detected, using recycle strategy for provider={payload.provider_uid}, model={payload.model}")
+        
+        # Prepare the schema for structured output
+        schema_dict = payload.output_schema.to_json_schema()
+        output_type = StructuredDict(
+            schema_dict,
+            name=payload.output_schema.title,
+            description=payload.output_schema.description
+        )
+        
+        total_input_tokens = 0
+        total_output_tokens = 0
+        
+        # Define executor function for recycle processing
+        async def chunk_executor(chunk_text: str, current_system_prompt: str) -> str:
+            nonlocal total_input_tokens, total_output_tokens
+            
+            # Create messages with the current system prompt and chunk text
+            structured_agent: Agent[None, dict[str, Any]] = Agent(output_type=output_type)
+            
+            # Build history with the current system prompt
+            chunk_history = [
+                ModelRequest(parts=[SystemPromptPart(content=current_system_prompt)])
+            ]
+            chunk_history.extend(history)  # Add any existing conversation history
+            
+            async with structured_agent:
+                result = await structured_agent.run(
+                    model=model,
+                    user_prompt=[chunk_text],
+                    message_history=chunk_history,
+                    builtin_tools=builtin_tools,
+                    toolsets=mcp_servers
+                )
+                
+                usage = result.usage()
+                total_input_tokens += usage.input_tokens
+                total_output_tokens += usage.output_tokens
+                
+                return json.dumps(result.output, ensure_ascii=False)
+        
+        # Process with recycle strategy
+        final_response = await self.context_manager.process_with_recycle(
+            text=text_content,
+            context_limit=payload.context_limit,
+            system_prompt=system_prompt,
+            executor=chunk_executor
+        )
+        
+        logfire.info(f"Request succeeded (recycle) for provider={payload.provider_uid}, model={payload.model}, total_input_tokens={total_input_tokens}, total_output_tokens={total_output_tokens}")
+        
+        return AgentResponse(
+            output=final_response,
+            usage=AgentResponseUsage(
+                input_tokens=total_input_tokens,
+                output_tokens=total_output_tokens,
+            ),
+            history=None  # History not supported in recycle mode
+        )
+    
+    async def _run_non_stream(
+        self,
+        payload: AgentRequest,
+        model,
+        prompt: List[Union[str, BinaryContent]],
+        history: List[Union[ModelMessage, ModelResponse]],
+        builtin_tools: List,
+        mcp_servers: List,
+    ) -> AgentResponse:
+        """
+        Run agent without streaming (extracted for reuse).
+        """
+        if payload.output_schema:
+            schema_dict = payload.output_schema.to_json_schema()
+            output_type = StructuredDict(
+                schema_dict,
+                name=payload.output_schema.title,
+                description=payload.output_schema.description
+            )
+            structured_agent: Agent[None, dict[str, Any]] = Agent(output_type=output_type)
+            async with structured_agent:
+                result = await structured_agent.run(
+                    model=model,
+                    user_prompt=prompt,
+                    message_history=history,
+                    builtin_tools=builtin_tools,
+                    toolsets=mcp_servers
+                )
+                
+                usage = result.usage()
+                history_msgs = self.convert_history_to_msgs(result.all_messages()) if payload.include_history else None
+                output_json = json.dumps(result.output, ensure_ascii=False)
+                logfire.info(f"Request succeeded for provider={payload.provider_uid}, model={payload.model}, input_tokens={usage.input_tokens}, output_tokens={usage.output_tokens}")
+                return AgentResponse(
+                    output=output_json, 
+                    usage=AgentResponseUsage(
+                        input_tokens=usage.input_tokens,
+                        output_tokens=usage.output_tokens,
+                    ),
+                    history=history_msgs
+                )
+        else:
+            async with self.agent:
+                result = await self.agent.run(
+                    model=model,
+                    user_prompt=prompt,
+                    message_history=history,
+                    builtin_tools=builtin_tools,
+                    toolsets=mcp_servers
+                )
+                
+                usage = result.usage()
+                history_msgs = self.convert_history_to_msgs(result.all_messages()) if payload.include_history else None
+                logfire.info(f"Request succeeded for provider={payload.provider_uid}, model={payload.model}, input_tokens={usage.input_tokens}, output_tokens={usage.output_tokens}")
+                return AgentResponse(
+                    output=result.output, 
+                    usage=AgentResponseUsage(
+                        input_tokens=usage.input_tokens,
+                        output_tokens=usage.output_tokens,
+                    ),
+                    history=history_msgs
+                )
         
     async def _run_stream_generator(
         self,
@@ -192,7 +399,7 @@ class AgentManager:
                     builtin_tools=builtin_tools,
                     toolsets=mcp_servers
                 ) as stream_response:
-                    async for output_dict in stream_response.stream_output(debounce_by=None):
+                    async for output_dict in stream_response.stream_output(debounce_by=0.05):
                         usage = stream_response.usage()
                         # Convert dict output to JSON string
                         output_json = json.dumps(output_dict, ensure_ascii=False) if output_dict else ""
@@ -337,6 +544,37 @@ class AgentManager:
         # Setup builtin tools
         builtin_tools, mcp_servers = self.create_tools(payload.tools)
         
+        # Handle context overflow if context_limit is set
+        if payload.context_limit > 0:
+            # Extract system prompt to preserve it during overflow handling
+            system_prompt = self._extract_system_prompt(payload.messages)
+            
+            text_content = self._extract_text_from_prompt(prompt)
+            needs_overflow_handling = self.context_manager.should_apply_overflow_handling(
+                text_content, payload.context_limit, system_prompt=system_prompt
+            )
+            
+            if needs_overflow_handling:
+                if payload.context_overflow_strategy == ContextOverflowStrategy.RECYCLE:
+                    # Recycle strategy: iteratively process chunks (non-streaming only)
+                    if stream:
+                        raise ValueError("Recycle strategy is not supported with streaming")
+                    return await self._run_with_recycle(
+                        payload=payload,
+                        model=model,
+                        prompt=prompt,
+                        history=history,
+                        builtin_tools=builtin_tools,
+                        mcp_servers=mcp_servers,
+                        system_prompt=system_prompt
+                    )
+                else:
+                    # Truncate strategy: apply truncation to prompt (system prompt preserved)
+                    logfire.info(f"Context overflow detected, using truncate strategy for provider={payload.provider_uid}, model={payload.model}")
+                    prompt = self._apply_truncation_to_prompt(
+                        prompt, payload.context_limit, system_prompt=system_prompt
+                    )
+        
         # Run the agent with all parameters
         if stream:
             # Return the validated generator that checks first token before streaming
@@ -350,56 +588,15 @@ class AgentManager:
                 output_schema=payload.output_schema
             )
         else:
-            # Handle structured output with custom JSON schema
-            if payload.output_schema:
-                schema_dict = payload.output_schema.to_json_schema()
-                output_type = StructuredDict(
-                    schema_dict,
-                    name=payload.output_schema.title,
-                    description=payload.output_schema.description
-                )
-                structured_agent: Agent[None, dict[str, Any]] = Agent(output_type=output_type)
-                async with structured_agent:
-                    result = await structured_agent.run(
-                        model=model,
-                        user_prompt=prompt,
-                        message_history=history,
-                        builtin_tools=builtin_tools,
-                        toolsets=mcp_servers
-                    )
-                    
-                    usage = result.usage()
-                    history_msgs = self.convert_history_to_msgs(result.all_messages()) if payload.include_history else None
-                    # Convert dict output to JSON string
-                    output_json = json.dumps(result.output, ensure_ascii=False)
-                    return AgentResponse(
-                        output=output_json, 
-                        usage=AgentResponseUsage(
-                            input_tokens=usage.input_tokens,
-                            output_tokens=usage.output_tokens,
-                        ),
-                        history=history_msgs
-                    )
-            else:
-                async with self.agent:
-                    result = await self.agent.run(
-                        model=model,
-                        user_prompt=prompt,
-                        message_history=history,
-                        builtin_tools=builtin_tools,
-                        toolsets=mcp_servers
-                    )
-                    
-                    usage = result.usage()
-                    history_msgs = self.convert_history_to_msgs(result.all_messages()) if payload.include_history else None
-                    return AgentResponse(
-                        output=result.output, 
-                        usage=AgentResponseUsage(
-                            input_tokens=usage.input_tokens,
-                            output_tokens=usage.output_tokens,
-                        ),
-                        history=history_msgs
-                    )
+            # Use extracted method for non-streaming execution
+            return await self._run_non_stream(
+                payload=payload,
+                model=model,
+                prompt=prompt,
+                history=history,
+                builtin_tools=builtin_tools,
+                mcp_servers=mcp_servers
+            )
 
     async def safe_run(
         self,

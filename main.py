@@ -11,6 +11,7 @@ from managers.ws import WsManager
 from managers.transcription_rt import TranscriptionRTManager
 from managers.redis import RedisManager
 from managers.file_store import FileStoreManager
+from managers.context import set_token_count_overhead
 from routers.agent import agent_router
 from routers.audio import audio_router
 from routers.providers import providers_router
@@ -45,12 +46,17 @@ class EnvSettings(BaseSettings):
     port: int = Field(8000, description="Port")
     redis_url: Optional[str] = Field(None, description="Redis URL for provider settings storage")
     encryption_salt: Optional[str] = Field(None, description="Salt for encrypting data. If not provided, data will be stored unencrypted.")
-    file_storage_path: str = Field("/data/providers.json", description="Path to file storage for provider settings")
+    file_storage_path: str = Field("data/providers.json", description="Path to file storage for provider settings")
+    token_count_overhead: float = Field(1.20, description="Safety overhead multiplier for tiktoken token counting (e.g., 1.20 for 20% buffer)")
 
 env_settings = EnvSettings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Configure token count overhead for context overflow handling
+    if env_settings.token_count_overhead != 1.20:
+        set_token_count_overhead(env_settings.token_count_overhead)
+    
     # Initialize persistence manager
     if env_settings.redis_url:
         app.state.persistence_manager = RedisManager(

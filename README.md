@@ -10,8 +10,10 @@ A unified FastAPI proxy server for AI services (LLMs and Audio) with built-in fa
 - 🔄 **Intelligent Fallback**: Automatic failover between providers
 - 🛠️ **MCP Tools**: Support for web search and MCP streamable servers
 - 📐 **Structured Output**: Force models to return JSON matching a custom schema
+- 📏 **Context Overflow Management**: Automatic handling of large texts with truncate/recycle strategies
 - 📊 **Observability**: Built-in logging with Logfire
 - 🚀 **Streaming Support**: Both streaming and non-streaming responses
+- 🔐 **Encrypted Storage**: Optional encryption for provider configurations (Redis or file-based)
 
 ## Installation
 
@@ -945,6 +947,100 @@ Structured output also works with the streaming endpoint (`/livellm/agent/run_st
 
 **Note:** Streaming structured output requires model support for streaming tool arguments. Some models (like Gemini) may not support this feature.
 
+## Context Overflow Management
+
+When dealing with large text inputs that exceed a model's context window, the proxy provides automatic context overflow handling with two strategies.
+
+### Configuration
+
+Add these parameters to your agent request:
+
+```json
+{
+  "provider_uid": "openai-1",
+  "model": "gpt-4",
+  "messages": [...],
+  "tools": [],
+  "context_limit": 16000,
+  "context_overflow_strategy": "truncate"
+}
+```
+
+**Parameters:**
+- `context_limit` (int, default: 0): Maximum context size in tokens. If <= 0, context overflow handling is disabled.
+- `context_overflow_strategy` (string, default: "truncate"): Strategy for handling overflow - either `"truncate"` or `"recycle"`.
+
+### Truncate Strategy
+
+The truncate strategy preserves content from the beginning, middle, and end of the text, ensuring important context from all parts is retained.
+
+**How it works:**
+- Divides available context (after reserving space for system prompt) into three equal parts
+- Takes content from the start, middle, and end of the text
+- Joins sections with `[...content truncated...]` markers
+
+**Example:** If `context_limit` is 16,000 tokens and the text is 48,000 tokens:
+- ~5,300 tokens from the start
+- ~5,300 tokens from the middle
+- ~5,300 tokens from the end
+
+**Works with:** Both streaming and non-streaming requests.
+
+### Recycle Strategy
+
+The recycle strategy iteratively processes chunks of text, passing previous results to be merged with new data. This is useful for extraction tasks where you need to process the entire document.
+
+**How it works:**
+1. Splits text into chunks that fit within the context limit
+2. Processes the first chunk with the original system prompt
+3. For subsequent chunks, includes the previous response in the prompt for merging
+4. Returns the final merged response
+
+**Requirements:**
+- Requires `output_schema` to be set (for JSON merging)
+- Only works with non-streaming requests
+
+**Example Request:**
+```json
+{
+  "provider_uid": "openai-1",
+  "model": "gpt-4",
+  "messages": [
+    {"role": "system", "content": "Extract all person names and their roles."},
+    {"role": "user", "content": "<very long document>"}
+  ],
+  "tools": [],
+  "context_limit": 8000,
+  "context_overflow_strategy": "recycle",
+  "output_schema": {
+    "title": "ExtractedPeople",
+    "properties": {
+      "people": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {"type": "string"},
+            "role": {"type": "string"}
+          }
+        }
+      }
+    },
+    "required": ["people"]
+  }
+}
+```
+
+### System Prompt Preservation
+
+System prompts are **always preserved** during context overflow handling:
+- Tokens for the system prompt are reserved before calculating available space for content
+- If the system prompt exceeds the context limit, an error is raised
+
+### Token Count Safety Buffer
+
+A 20% overhead buffer is applied to all token calculations to account for potential tiktoken inaccuracies. This can be configured via the `TOKEN_COUNT_OVERHEAD` environment variable.
+
 ## Environment Variables
 
 ```bash
@@ -955,6 +1051,19 @@ PORT=8000
 # Observability (optional)
 LOGFIRE_WRITE_TOKEN=your-token
 OTEL_EXPORTER_OTLP_ENDPOINT=your-endpoint
+
+# Persistence Configuration
+# If REDIS_URL is provided, uses Redis; otherwise uses file storage
+REDIS_URL=redis://localhost:6379/0
+FILE_STORAGE_PATH=/data/providers.json
+
+# Encryption Salt (optional, applies to both Redis and File storage)
+# If not provided, data is stored unencrypted
+ENCRYPTION_SALT=your-random-salt-string
+
+# Context Overflow Configuration
+# Safety overhead multiplier for tiktoken token counting (default: 1.20 = 20% buffer)
+TOKEN_COUNT_OVERHEAD=1.20
 ```
 
 ## Architecture

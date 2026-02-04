@@ -2,10 +2,17 @@
 
 from pydantic import BaseModel, Field
 from typing import Optional, List, Union, Any, Dict, Literal
+from enum import Enum
 from models.agent.chat import TextMessage, BinaryMessage
 from models.agent.tools import WebSearchInput, MCPStreamableServerInput
 from models.common import BaseRequest
 from models.agent.chat import TextMessage, BinaryMessage, ToolCallMessage, ToolReturnMessage
+
+
+class ContextOverflowStrategy(str, Enum):
+    """Strategy for handling context overflow when text exceeds context_limit."""
+    TRUNCATE = "truncate"  # Take beginning, middle, and end portions
+    RECYCLE = "recycle"    # Iteratively process chunks, merging results
 
 
 class JsonSchemaProperty(BaseModel):
@@ -59,6 +66,14 @@ class AgentRequest(BaseRequest):
     gen_config: Optional[dict] = Field(default=None, description="The configuration for the generation")
     include_history: bool = Field(default=False, description="Whether to include the history in the response")
     output_schema: Optional[OutputSchema] = Field(default=None, description="JSON schema for structured output. When provided, the agent will return a JSON string matching this schema.")
+    context_limit: int = Field(
+        default=0, 
+        description="Maximum context size in tokens. If <= 0, context is assumed not to be an issue. If > 0, applies context_overflow_strategy when text exceeds this limit."
+    )
+    context_overflow_strategy: ContextOverflowStrategy = Field(
+        default=ContextOverflowStrategy.TRUNCATE,
+        description="Strategy for handling context overflow: 'truncate' takes start/middle/end portions, 'recycle' iteratively processes chunks and merges results."
+    )
 
 
 class AgentResponseUsage(BaseModel):
