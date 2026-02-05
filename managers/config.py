@@ -15,18 +15,26 @@ ProviderClient: TypeAlias = Union[AsyncOpenAI, genai.Client, AsyncAnthropic, Asy
 
 class ConfigManager:
 
-    def __init__(self, persistence_manager=None):
+    def __init__(self, file_store=None, redis_manager=None):
         self.configs: Dict[str, Settings] = {} # config_id: Settings
         self.providers: Dict[str, ProviderClient] = {} # provider_id: provider kind's client instance
-        self.persistence_manager = persistence_manager
+        self.file_store = file_store  # Always used for PVC persistence
+        self.redis_manager = redis_manager  # Optional Redis persistence
     
 
     async def load_providers_from_persistence(self):
-        """Load all provider configurations from persistence storage on startup"""
-        if not self.persistence_manager:
+        """
+        Load all provider configurations from persistence storage on startup.
+        Prefers Redis if available, otherwise loads from file store.
+        """
+        # Determine primary source (prefer Redis if available)
+        primary_source = self.redis_manager if self.redis_manager else self.file_store
+        
+        if not primary_source:
+            logfire.warn("No persistence source available for loading providers")
             return
         
-        all_settings = await self.persistence_manager.load_all_provider_settings()
+        all_settings = await primary_source.load_all_provider_settings()
         for uid, settings_dict in all_settings.items():
             try:
                 # Reconstruct Settings object from dictionary
@@ -37,20 +45,29 @@ class ConfigManager:
                 logfire.error(f"Failed to load provider {uid} from persistence: {e}")
     
     async def add_config(self, config: Settings):
-        """Add provider configuration and persist to storage"""
+        """
+        Add provider configuration and persist to storage.
+        Always saves to file store (PVC), and additionally to Redis if available.
+        """
         self.configs[config.uid] = config
         self.providers[config.uid] = self.create_provider_client(config)
         
-        # Persist to storage if available
-        if self.persistence_manager:
-            # Manually serialize to include the actual secret values
-            settings_dict = config.model_dump(mode='json')
-            # Replace the masked api_key with the actual secret value
-            settings_dict['api_key'] = config.api_key.get_secret_value()
-            await self.persistence_manager.save_provider_settings(
-                config.uid, 
-                settings_dict
-            )
+        # Manually serialize to include the actual secret values
+        settings_dict = config.model_dump(mode='json')
+        # Replace the masked api_key with the actual secret value
+        settings_dict['api_key'] = config.api_key.get_secret_value()
+        
+        # Always persist to file store (PVC)
+        if self.file_store:
+            success = await self.file_store.save_provider_settings(config.uid, settings_dict)
+            if not success:
+                logfire.error(f"Failed to save provider {config.uid} to file store")
+        
+        # Also persist to Redis if available
+        if self.redis_manager:
+            success = await self.redis_manager.save_provider_settings(config.uid, settings_dict)
+            if not success:
+                logfire.error(f"Failed to save provider {config.uid} to Redis")
     
     def get_config_client(self, uid: str, model: str) -> Optional[ProviderClient]:
         if uid not in self.configs:
@@ -78,15 +95,22 @@ class ConfigManager:
         return provider_kind, provider_client
     
     async def delete_config(self, uid: str):
-        """Delete provider configuration and remove from storage"""
+        """
+        Delete provider configuration and remove from storage.
+        Removes from both file store (PVC) and Redis if available.
+        """
         if uid not in self.configs:
             raise ValueError(f"Config {uid} not found")
         self.configs.pop(uid)
         self.providers.pop(uid)
         
-        # Remove from storage if available
-        if self.persistence_manager:
-            await self.persistence_manager.delete_provider_settings(uid)
+        # Remove from file store (PVC)
+        if self.file_store:
+            await self.file_store.delete_provider_settings(uid)
+        
+        # Remove from Redis if available
+        if self.redis_manager:
+            await self.redis_manager.delete_provider_settings(uid)
     
     def create_provider_client(self, settings: Settings) -> ProviderClient:
         # Extract the actual API key from SecretStr

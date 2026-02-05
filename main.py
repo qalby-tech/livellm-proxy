@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 from fastapi import FastAPI
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -51,48 +52,9 @@ class EnvSettings(BaseSettings):
     encryption_salt: Optional[str] = Field(None, description="Salt for encrypting data. If not provided, data will be stored unencrypted.")
     token_count_overhead: float = Field(1.20, description="Safety overhead multiplier for tiktoken token counting (e.g., 1.20 for 20% buffer)")
     enable_storage_reconciliation: bool = Field(True, description="Enable reconciliation between file storage and Redis on startup/shutdown")
+    reconciliation_interval_seconds: int = Field(300, description="Interval in seconds for periodic reconciliation between file storage and Redis (default: 300 = 5 minutes)")
 
 env_settings = EnvSettings()
-
-async def reconcile_file_to_redis(
-    file_store: FileStoreManager, 
-    redis_manager: RedisManager
-) -> int:
-    """
-    Reconcile provider settings from file storage to Redis.
-    Only adds settings that don't already exist in Redis.
-    
-    Returns:
-        Number of settings reconciled
-    """
-    try:
-        # Load all settings from file storage
-        file_settings = await file_store.load_all_provider_settings()
-        if not file_settings:
-            logfire.info("No settings found in file storage to reconcile")
-            return 0
-        
-        # Load existing Redis settings
-        redis_settings = await redis_manager.load_all_provider_settings()
-        
-        reconciled_count = 0
-        for uid, settings_dict in file_settings.items():
-            # Only add if not already in Redis (Redis takes precedence)
-            if uid not in redis_settings:
-                success = await redis_manager.save_provider_settings(uid, settings_dict)
-                if success:
-                    reconciled_count += 1
-                    logfire.info(f"Reconciled provider {uid} from file storage to Redis")
-                else:
-                    logfire.error(f"Failed to reconcile provider {uid} to Redis")
-        
-        if reconciled_count > 0:
-            logfire.info(f"Reconciled {reconciled_count} provider settings from file storage to Redis")
-        
-        return reconciled_count
-    except Exception as e:
-        logfire.error(f"Failed to reconcile file storage to Redis: {e}")
-        return 0
 
 
 async def backup_redis_to_file(
@@ -130,40 +92,121 @@ async def backup_redis_to_file(
         return 0
 
 
+async def reconcile_storages(
+    file_store: FileStoreManager,
+    redis_manager: RedisManager
+) -> tuple[int, int]:
+    """
+    Bidirectional reconciliation between file storage and Redis.
+    - Settings in file but not in Redis → add to Redis
+    - Settings in Redis but not in file → add to file
+    
+    Returns:
+        Tuple of (file_to_redis_count, redis_to_file_count)
+    """
+    file_to_redis = 0
+    redis_to_file = 0
+    
+    try:
+        file_settings = await file_store.load_all_provider_settings()
+        redis_settings = await redis_manager.load_all_provider_settings()
+        
+        # File → Redis (settings in file but not in Redis)
+        for uid, settings_dict in file_settings.items():
+            if uid not in redis_settings:
+                success = await redis_manager.save_provider_settings(uid, settings_dict)
+                if success:
+                    file_to_redis += 1
+                    logfire.debug(f"Reconciled provider {uid} from file to Redis")
+        
+        # Redis → File (settings in Redis but not in file)
+        for uid, settings_dict in redis_settings.items():
+            if uid not in file_settings:
+                success = await file_store.save_provider_settings(uid, settings_dict)
+                if success:
+                    redis_to_file += 1
+                    logfire.debug(f"Reconciled provider {uid} from Redis to file")
+        
+        if file_to_redis > 0 or redis_to_file > 0:
+            logfire.info(f"Reconciliation complete: {file_to_redis} file→Redis, {redis_to_file} Redis→file")
+        
+        return file_to_redis, redis_to_file
+    except Exception as e:
+        logfire.error(f"Failed to reconcile storages: {e}")
+        return 0, 0
+
+
+async def periodic_reconciliation_task(
+    file_store: FileStoreManager,
+    redis_manager: RedisManager,
+    interval_seconds: int
+):
+    """
+    Background task that periodically reconciles file storage and Redis.
+    """
+    logfire.info(f"Starting periodic reconciliation task with interval {interval_seconds}s")
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+            logfire.debug("Running periodic storage reconciliation")
+            await reconcile_storages(file_store, redis_manager)
+        except asyncio.CancelledError:
+            logfire.info("Periodic reconciliation task cancelled")
+            break
+        except Exception as e:
+            logfire.error(f"Error in periodic reconciliation: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Configure token count overhead for context overflow handling
     if env_settings.token_count_overhead != 1.20:
         set_token_count_overhead(env_settings.token_count_overhead)
     
-    # Always initialize file store for reconciliation/backup purposes
+    # Always initialize file store (PVC) - this is the primary persistence
     app.state.file_store = FileStoreManager(
         file_path=FILE_STORAGE_PATH,
         encryption_salt=env_settings.encryption_salt
     )
+    logfire.info(f"Initialized file store at {FILE_STORAGE_PATH}")
     
-    # Initialize persistence manager
+    # Initialize Redis manager if configured (optional secondary persistence)
+    app.state.redis_manager = None
+    app.state.reconciliation_task = None
+    
     if env_settings.redis_url:
-        app.state.persistence_manager = RedisManager(
+        app.state.redis_manager = RedisManager(
             redis_url=env_settings.redis_url,
             encryption_salt=env_settings.encryption_salt
         )
-        await app.state.persistence_manager.connect()
-        logfire.info("Using Redis for persistence")
+        await app.state.redis_manager.connect()
+        logfire.info("Redis manager initialized for secondary persistence")
         
-        # Reconcile: migrate any file storage settings to Redis (if switching from file to Redis)
+        # Initial reconciliation: sync file storage and Redis
         if env_settings.enable_storage_reconciliation:
-            await reconcile_file_to_redis(app.state.file_store, app.state.persistence_manager)
+            await reconcile_storages(app.state.file_store, app.state.redis_manager)
+            
+            # Start periodic reconciliation background task
+            app.state.reconciliation_task = asyncio.create_task(
+                periodic_reconciliation_task(
+                    app.state.file_store,
+                    app.state.redis_manager,
+                    env_settings.reconciliation_interval_seconds
+                )
+            )
         else:
-            logfire.info("Storage reconciliation disabled, skipping file-to-Redis sync")
+            logfire.info("Storage reconciliation disabled")
     else:
-        app.state.persistence_manager = app.state.file_store
-        logfire.info(f"Using File Storage for persistence at {FILE_STORAGE_PATH}")
+        logfire.info("Redis not configured, using file store only")
     
-    # Initialize config manager with persistence support
-    app.state.config_manager = ConfigManager(persistence_manager=app.state.persistence_manager)
+    # Initialize config manager with both persistence backends
+    # ConfigManager will always save to file store, and also to Redis if available
+    app.state.config_manager = ConfigManager(
+        file_store=app.state.file_store,
+        redis_manager=app.state.redis_manager
+    )
     
-    # Load provider configurations from persistence
+    # Load provider configurations from persistence (prefers Redis if available)
     await app.state.config_manager.load_providers_from_persistence()
     
     app.state.fallback_manager = FallbackManager()
@@ -184,17 +227,22 @@ async def lifespan(app: FastAPI):
     )
     yield
     
-    # Shutdown: backup Redis to file storage for safety
-    if env_settings.redis_url and isinstance(app.state.persistence_manager, RedisManager):
-        if env_settings.enable_storage_reconciliation:
-            logfire.info("Backing up Redis settings to file storage on shutdown")
-            await backup_redis_to_file(app.state.persistence_manager, app.state.file_store)
-        else:
-            logfire.info("Storage reconciliation disabled, skipping Redis-to-file backup")
+    # Shutdown: cancel periodic reconciliation task
+    if app.state.reconciliation_task:
+        app.state.reconciliation_task.cancel()
+        try:
+            await app.state.reconciliation_task
+        except asyncio.CancelledError:
+            pass
     
-    # Cleanup: disconnect from persistence if needed
-    if hasattr(app.state.persistence_manager, 'disconnect'):
-        await app.state.persistence_manager.disconnect()
+    # Shutdown: final backup Redis to file storage for safety
+    if app.state.redis_manager:
+        if env_settings.enable_storage_reconciliation:
+            logfire.info("Final backup: syncing Redis to file storage on shutdown")
+            await backup_redis_to_file(app.state.redis_manager, app.state.file_store)
+        
+        # Disconnect from Redis
+        await app.state.redis_manager.disconnect()
 
 
 app = FastAPI(lifespan=lifespan, root_path="/livellm")
@@ -205,6 +253,7 @@ app.include_router(ws_router)
 app.include_router(transcription_ws_router)
 
 # configure logfire
+os.environ["LOGFIRE_DISTRIBUTED_TRACING"] = "false"
 os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = env_settings.otel_exporter_otlp_endpoint or ""
 logfire.configure(
     service_name="livellm-proxy", 
