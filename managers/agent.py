@@ -228,15 +228,16 @@ class AgentManager:
         Iteratively processes chunks of text, passing previous results
         to be merged with new data. System prompt is preserved and excluded
         from chunking calculations.
+        
+        Supports both structured output (with output_schema) and plain text output.
         """
-        if not payload.output_schema:
-            raise ValueError("Recycle strategy requires output_schema to be set for merging results")
+        is_structured = payload.output_schema is not None
         
         # Use provided system prompt or extract from messages
         if not system_prompt:
             system_prompt = self._extract_system_prompt(payload.messages)
         if not system_prompt:
-            system_prompt = "Generate a structured response based on the provided data."
+            system_prompt = "Generate a structured response based on the provided data." if is_structured else "Process and summarize the provided data."
         
         # Extract text content from prompt
         text_content = self._extract_text_from_prompt(prompt)
@@ -248,53 +249,83 @@ class AgentManager:
             # No overflow, run normally
             return await self._run_non_stream(payload, model, prompt, history, builtin_tools, mcp_servers)
         
-        logfire.info(f"Context overflow detected, using recycle strategy for provider={payload.provider_uid}, model={payload.model}")
-        
-        # Prepare the schema for structured output
-        schema_dict = payload.output_schema.to_json_schema()
-        output_type = StructuredDict(
-            schema_dict,
-            name=payload.output_schema.title,
-            description=payload.output_schema.description
-        )
+        logfire.info(f"Context overflow detected, using recycle strategy (structured={is_structured}) for provider={payload.provider_uid}, model={payload.model}")
         
         total_input_tokens = 0
         total_output_tokens = 0
         
-        # Define executor function for recycle processing
-        async def chunk_executor(chunk_text: str, current_system_prompt: str) -> str:
-            nonlocal total_input_tokens, total_output_tokens
+        if is_structured:
+            # Prepare the schema for structured output
+            schema_dict = payload.output_schema.to_json_schema()
+            output_type = StructuredDict(
+                schema_dict,
+                name=payload.output_schema.title,
+                description=payload.output_schema.description
+            )
             
-            # Create messages with the current system prompt and chunk text
-            structured_agent: Agent[None, dict[str, Any]] = Agent(output_type=output_type)
-            
-            # Build history with the current system prompt
-            chunk_history = [
-                ModelRequest(parts=[SystemPromptPart(content=current_system_prompt)])
-            ]
-            chunk_history.extend(history)  # Add any existing conversation history
-            
-            async with structured_agent:
-                result = await structured_agent.run(
-                    model=model,
-                    user_prompt=[chunk_text],
-                    message_history=chunk_history,
-                    builtin_tools=builtin_tools,
-                    toolsets=mcp_servers
-                )
+            # Define executor function for structured recycle processing
+            async def chunk_executor(chunk_text: str, current_system_prompt: str) -> str:
+                nonlocal total_input_tokens, total_output_tokens
                 
-                usage = result.usage()
-                total_input_tokens += usage.input_tokens
-                total_output_tokens += usage.output_tokens
+                # Create messages with the current system prompt and chunk text
+                structured_agent: Agent[None, dict[str, Any]] = Agent(output_type=output_type)
                 
-                return json.dumps(result.output, ensure_ascii=False)
+                # Build history with the current system prompt
+                chunk_history = [
+                    ModelRequest(parts=[SystemPromptPart(content=current_system_prompt)])
+                ]
+                chunk_history.extend(history)  # Add any existing conversation history
+                
+                async with structured_agent:
+                    result = await structured_agent.run(
+                        model=model,
+                        user_prompt=[chunk_text],
+                        message_history=chunk_history,
+                        builtin_tools=builtin_tools,
+                        toolsets=mcp_servers
+                    )
+                    
+                    usage = result.usage()
+                    total_input_tokens += usage.input_tokens
+                    total_output_tokens += usage.output_tokens
+                    
+                    return json.dumps(result.output, ensure_ascii=False)
+        else:
+            # Define executor function for plain text recycle processing
+            async def chunk_executor(chunk_text: str, current_system_prompt: str) -> str:
+                nonlocal total_input_tokens, total_output_tokens
+                
+                # Use plain text agent
+                text_agent: Agent[None, str] = Agent()
+                
+                # Build history with the current system prompt
+                chunk_history = [
+                    ModelRequest(parts=[SystemPromptPart(content=current_system_prompt)])
+                ]
+                chunk_history.extend(history)  # Add any existing conversation history
+                
+                async with text_agent:
+                    result = await text_agent.run(
+                        model=model,
+                        user_prompt=[chunk_text],
+                        message_history=chunk_history,
+                        builtin_tools=builtin_tools,
+                        toolsets=mcp_servers
+                    )
+                    
+                    usage = result.usage()
+                    total_input_tokens += usage.input_tokens
+                    total_output_tokens += usage.output_tokens
+                    
+                    return result.output
         
         # Process with recycle strategy
         final_response = await self.context_manager.process_with_recycle(
             text=text_content,
             context_limit=payload.context_limit,
             system_prompt=system_prompt,
-            executor=chunk_executor
+            executor=chunk_executor,
+            is_structured=is_structured
         )
         
         logfire.info(f"Request succeeded (recycle) for provider={payload.provider_uid}, model={payload.model}, total_input_tokens={total_input_tokens}, total_output_tokens={total_output_tokens}")

@@ -107,6 +107,20 @@ Given new data, update the response according to the system prompt.
 Updating might require inserting new information or updating existing information.
 Return the updated response in JSON format strictly following the system prompt.
 """
+
+    RECYCLE_TEXT_SYSTEM_PROMPT_TEMPLATE = """You are a text processing assistant.
+<system_prompt>
+{system_prompt}
+</system_prompt>
+
+The text might be too big to fit into your context window, so you need to iteratively process and merge the response given new data.
+<last_response>
+{last_response}
+</last_response>
+Given new data, update and merge the response according to the system prompt.
+Combine the previous response with new information extracted from the new data.
+Return the merged response as plain text.
+"""
     
     def __init__(self, encoding_name: str = Tokenizer.DEFAULT_ENCODING):
         """
@@ -255,18 +269,20 @@ Return the updated response in JSON format strictly following the system prompt.
         logfire.info(f"Context overflow: split text into {len(chunks)} chunks of ~{safe_chunk_size} tokens each (with overhead safety)")
         return chunks
     
-    def get_recycle_system_prompt(self, original_system_prompt: str, last_response: str) -> str:
+    def get_recycle_system_prompt(self, original_system_prompt: str, last_response: str, is_structured: bool = True) -> str:
         """
         Generate the system prompt for subsequent recycle iterations.
         
         Args:
             original_system_prompt: The original system prompt from the request
-            last_response: JSON string of the previous iteration's response
+            last_response: JSON string of the previous iteration's response (or plain text)
+            is_structured: If True, uses JSON template; if False, uses plain text template
             
         Returns:
             System prompt for the next iteration with merge instructions
         """
-        return self.RECYCLE_SYSTEM_PROMPT_TEMPLATE.format(
+        template = self.RECYCLE_SYSTEM_PROMPT_TEMPLATE if is_structured else self.RECYCLE_TEXT_SYSTEM_PROMPT_TEMPLATE
+        return template.format(
             system_prompt=original_system_prompt,
             last_response=last_response
         )
@@ -277,6 +293,7 @@ Return the updated response in JSON format strictly following the system prompt.
         context_limit: int,
         system_prompt: str,
         executor: Callable[[str, str], Awaitable[str]],
+        is_structured: bool = True,
     ) -> str:
         """
         Process text using the recycle strategy.
@@ -291,6 +308,7 @@ Return the updated response in JSON format strictly following the system prompt.
             context_limit: Maximum tokens for total context
             system_prompt: The original system prompt (will be preserved)
             executor: Async function that takes (text_chunk, system_prompt) and returns response string
+            is_structured: If True, uses JSON merging template; if False, uses plain text merging
             
         Returns:
             Final merged response after processing all chunks
@@ -304,9 +322,11 @@ Return the updated response in JSON format strictly following the system prompt.
         
         # For subsequent chunks, we use the recycle template which is larger
         # Estimate the recycle system prompt size with a reasonable last_response estimate
-        recycle_prompt_estimate = self.RECYCLE_SYSTEM_PROMPT_TEMPLATE.format(
+        template = self.RECYCLE_SYSTEM_PROMPT_TEMPLATE if is_structured else self.RECYCLE_TEXT_SYSTEM_PROMPT_TEMPLATE
+        placeholder_response = '{"placeholder": "estimated response of moderate size for calculation"}' if is_structured else 'Estimated response of moderate size for calculation purposes.'
+        recycle_prompt_estimate = template.format(
             system_prompt=system_prompt,
-            last_response='{"placeholder": "estimated response of moderate size for calculation"}'
+            last_response=placeholder_response
         )
         recycle_prompt_tokens = self.tokenizer.count_tokens(recycle_prompt_estimate, with_overhead=True)
         
@@ -348,7 +368,7 @@ Return the updated response in JSON format strictly following the system prompt.
                 current_system_prompt = system_prompt
             else:
                 # Subsequent chunks: include previous response for merging
-                current_system_prompt = self.get_recycle_system_prompt(system_prompt, last_response)
+                current_system_prompt = self.get_recycle_system_prompt(system_prompt, last_response, is_structured=is_structured)
             
             logfire.info(f"Context overflow recycle: processing chunk {i + 1}/{len(chunks)}")
             last_response = await executor(chunk, current_system_prompt)
