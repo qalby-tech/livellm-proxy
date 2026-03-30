@@ -46,5 +46,7 @@ async def delete_config(uid: str, config_manager: ConfigManagerType) -> SuccessR
         await config_manager.delete_config(uid)
         return SuccessResponse()
     except ValueError as e:
+        if "not found" in str(e).lower():
+            raise HTTPException(status_code=404, detail=str(e))
         raise HTTPException(status_code=400, detail=str(e))
 
