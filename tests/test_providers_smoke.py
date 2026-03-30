@@ -15,11 +15,7 @@ def test_get_empty_configs(client):
 
 def test_add_valid_config(client):
     """Test adding a valid provider configuration."""
-    config = {
-        "uid": "test-openai",
-        "provider": "openai",
-        "api_key": "sk-test-key-123"
-    }
+    config = {"uid": "test-openai", "provider": "openai", "api_key": "sk-test-key-123"}
     response = client.post("/livellm/providers/config", json=config)
     assert response.status_code == 201
     assert response.json()["success"] is True
@@ -31,7 +27,7 @@ def test_add_config_with_base_url(client):
         "uid": "test-openai-custom",
         "provider": "openai",
         "api_key": "sk-test-key-456",
-        "base_url": "https://custom.openai.com/v1"
+        "base_url": "https://custom.openai.com/v1",
     }
     response = client.post("/livellm/providers/config", json=config)
     assert response.status_code == 201
@@ -53,7 +49,7 @@ def test_add_config_invalid_provider(client):
     config = {
         "uid": "test-invalid",
         "provider": "invalid-provider-name",
-        "api_key": "sk-test-key"
+        "api_key": "sk-test-key",
     }
     response = client.post("/livellm/providers/config", json=config)
     assert response.status_code == 422  # Validation error
@@ -62,7 +58,7 @@ def test_add_config_invalid_provider(client):
 def test_delete_nonexistent_config(client):
     """Test deleting a config that doesn't exist."""
     response = client.delete("/livellm/providers/config/nonexistent-uid")
-    assert response.status_code == 400
+    assert response.status_code == 404
 
 
 def test_get_configs_returns_list(client):
@@ -71,4 +67,3 @@ def test_get_configs_returns_list(client):
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
-
