@@ -12,7 +12,7 @@ from groq import AsyncGroq
 from openai import AsyncOpenAI
 
 from managers.redis import RedisManager
-from models.common import ProviderKind, Settings
+from models.common import ProviderKind, Settings, ModelConfig
 
 ProviderClient: TypeAlias = Union[
     AsyncOpenAI, genai.Client, AsyncAnthropic, AsyncGroq, AsyncElevenLabs
@@ -125,6 +125,24 @@ class ConfigManager:
             raise ValueError(f"Provider '{uid}' client could not be created")
         provider_kind = self.get_config_provider(uid)
         return provider_kind, provider_client
+
+    def get_model_config(self, uid: str, model: str) -> Optional[ModelConfig]:
+        """
+        Get the model-specific configuration for a given provider and model.
+        
+        Args:
+            uid: The provider UID
+            model: The model name
+            
+        Returns:
+            ModelConfig if configured for this model, None otherwise
+        """
+        if uid not in self.configs:
+            return None
+        settings = self.configs[uid]
+        if not settings.model_configs:
+            return None
+        return settings.model_configs.get(model)
 
     # ------------------------------------------------------------------
     # Provider client factory

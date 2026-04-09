@@ -23,7 +23,7 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.models.groq import GroqModel
 from pydantic_ai.providers.groq import GroqProvider
 # pydantic models
-from models.common import ProviderKind
+from models.common import ProviderKind, ContextOverflowStrategyType, FallbackStrategyType
 from models.agent.tools import WebSearchInput, MCPStreamableServerInput, ToolKind, ToolInput
 from models.agent.chat import MessageRole, TextMessage, BinaryMessage, ToolCallMessage, ToolReturnMessage
 from models.agent.agent import AgentRequest, AgentResponse, AgentResponseUsage, OutputSchema, ContextOverflowStrategy
@@ -512,6 +512,76 @@ class AgentManager:
         async for chunk in generator:
             yield chunk
     
+    def _get_effective_context_config(
+        self, 
+        payload: AgentRequest
+    ) -> Tuple[int, ContextOverflowStrategy]:
+        """
+        Get effective context limit and strategy, prioritizing user request over config.
+        
+        User-specified values in the request take priority over provider model config.
+        
+        Args:
+            payload: The agent request
+            
+        Returns:
+            Tuple of (context_limit, context_overflow_strategy)
+        """
+        # Get model-specific config from provider settings
+        model_config = self.config_manager.get_model_config(payload.provider_uid, payload.model)
+        
+        # Determine effective context limit
+        # User's request takes priority (>0 means user specified it)
+        if payload.context_limit > 0:
+            context_limit = payload.context_limit
+        elif model_config and model_config.context_limit > 0:
+            context_limit = model_config.context_limit
+        else:
+            context_limit = 0
+        
+        # Determine effective overflow strategy
+        # User's request takes priority (non-default means user specified it)
+        if payload.context_overflow_strategy != ContextOverflowStrategy.TRUNCATE:
+            # User explicitly set a non-default strategy
+            strategy = payload.context_overflow_strategy
+        elif model_config:
+            # Convert config strategy to request strategy type
+            if model_config.context_overflow_strategy == ContextOverflowStrategyType.RECYCLE:
+                strategy = ContextOverflowStrategy.RECYCLE
+            else:
+                strategy = ContextOverflowStrategy.TRUNCATE
+        else:
+            strategy = payload.context_overflow_strategy  # Use default from request
+        
+        return context_limit, strategy
+    
+    def _get_fallback_config(self, payload: AgentRequest) -> Optional[Tuple[str, str, FallbackStrategyType, int, ContextOverflowStrategy]]:
+        """
+        Get fallback configuration for the model if configured.
+        
+        Args:
+            payload: The agent request
+            
+        Returns:
+            Tuple of (fallback_provider_uid, fallback_model, fallback_strategy, context_limit, context_overflow_strategy) if configured, None otherwise
+        """
+        model_config = self.config_manager.get_model_config(payload.provider_uid, payload.model)
+        if model_config and model_config.fallback:
+            # Convert context overflow strategy type
+            if model_config.fallback.context_overflow_strategy == ContextOverflowStrategyType.RECYCLE:
+                overflow_strategy = ContextOverflowStrategy.RECYCLE
+            else:
+                overflow_strategy = ContextOverflowStrategy.TRUNCATE
+            
+            return (
+                model_config.fallback.fallback_provider_uid,
+                model_config.fallback.fallback_model,
+                model_config.fallback.fallback_strategy,
+                model_config.fallback.context_limit,
+                overflow_strategy,
+            )
+        return None
+
     async def run(
         self,
         payload: AgentRequest,
@@ -531,6 +601,9 @@ class AgentManager:
         """
         if not payload.messages:
             raise ValueError("Messages list cannot be empty")
+        
+        # Get effective context config (user request takes priority over provider config)
+        context_limit, context_overflow_strategy = self._get_effective_context_config(payload)
         
         # Create the model using the cached provider
         model = self.create_model(
@@ -576,17 +649,17 @@ class AgentManager:
         builtin_tools, mcp_servers = self.create_tools(payload.tools)
         
         # Handle context overflow if context_limit is set
-        if payload.context_limit > 0:
+        if context_limit > 0:
             # Extract system prompt to preserve it during overflow handling
             system_prompt = self._extract_system_prompt(payload.messages)
             
             text_content = self._extract_text_from_prompt(prompt)
             needs_overflow_handling = self.context_manager.should_apply_overflow_handling(
-                text_content, payload.context_limit, system_prompt=system_prompt
+                text_content, context_limit, system_prompt=system_prompt
             )
             
             if needs_overflow_handling:
-                if payload.context_overflow_strategy == ContextOverflowStrategy.RECYCLE:
+                if context_overflow_strategy == ContextOverflowStrategy.RECYCLE:
                     # Recycle strategy: iteratively process chunks (non-streaming only)
                     if stream:
                         raise ValueError("Recycle strategy is not supported with streaming")
@@ -603,7 +676,7 @@ class AgentManager:
                     # Truncate strategy: apply truncation to prompt (system prompt preserved)
                     logfire.info(f"Context overflow detected, using truncate strategy for provider={payload.provider_uid}, model={payload.model}")
                     prompt = self._apply_truncation_to_prompt(
-                        prompt, payload.context_limit, system_prompt=system_prompt
+                        prompt, context_limit, system_prompt=system_prompt
                     )
         
         # Run the agent with all parameters
@@ -637,8 +710,9 @@ class AgentManager:
         """
         Run agent with optional fallback support.
         
-        If payload is AgentRequest: runs normally
+        If payload is AgentRequest: runs normally, with automatic fallback from config if available
         If payload is AgentFallbackRequest: uses fallback manager to try multiple requests
+            (user explicitly provided fallback list - takes priority over config)
         
         Args:
             payload: Either AgentRequest or AgentFallbackRequest
@@ -648,20 +722,71 @@ class AgentManager:
             If stream=False: AgentResponse with the complete output and usage
             If stream=True: AsyncIterator[AgentResponse] that yields chunks as they arrive
         """
-        # If it's a simple request, run normally
-        if isinstance(payload, AgentRequest):
+        # If it's a fallback request (user explicitly specified fallbacks), use them directly
+        if isinstance(payload, AgentFallbackRequest):
+            if not self.fallback_manager:
+                raise ValueError("FallbackManager not configured. Cannot use fallback requests.")
+            
+            # Define the executor function for the fallback manager
+            async def executor(request: AgentRequest) -> Union[AsyncIterator[AgentResponse], AgentResponse]:
+                return await self.run(request, stream=stream)
+            
+            # Use the fallback manager's catch method
+            return await self.fallback_manager.catch(payload, executor)
+        
+        # For simple AgentRequest, try with automatic fallback from config if available
+        fallback_config = self._get_fallback_config(payload)
+        
+        if not fallback_config:
+            # No fallback configured, run normally
             return await self.run(payload, stream=stream)
         
-        # If it's a fallback request, use the fallback manager
+        # We have fallback config - try primary first, then fallback on failure
         if not self.fallback_manager:
-            raise ValueError("FallbackManager not configured. Cannot use fallback requests.")
+            # No fallback manager, just try primary
+            return await self.run(payload, stream=stream)
+        
+        # Build fallback request list: primary first, then fallback from config
+        fallback_provider_uid, fallback_model, fallback_strategy, fb_context_limit, fb_context_overflow_strategy = fallback_config
+        
+        # Create the fallback request with same messages/tools but different provider/model
+        # Use the context settings from the fallback config
+        fallback_request = AgentRequest(
+            provider_uid=fallback_provider_uid,
+            model=fallback_model,
+            messages=payload.messages,
+            tools=payload.tools,
+            gen_config=payload.gen_config,
+            include_history=payload.include_history,
+            output_schema=payload.output_schema,
+            context_limit=fb_context_limit,
+            context_overflow_strategy=fb_context_overflow_strategy
+        )
+        
+        # Map the config strategy type to the fallback model strategy enum
+        if fallback_strategy == FallbackStrategyType.PARALLEL:
+            fb_strategy = FallbackStrategy.PARALLEL
+        else:
+            fb_strategy = FallbackStrategy.SEQUENTIAL
+        
+        # Create fallback request with primary first, then configured fallback
+        fallback_payload = AgentFallbackRequest(
+            requests=[payload, fallback_request],
+            strategy=fb_strategy,
+            timeout_per_request=360
+        )
+        
+        logfire.info(
+            f"Using automatic fallback from config: {payload.provider_uid}/{payload.model} -> "
+            f"{fallback_provider_uid}/{fallback_model} (strategy={fb_strategy.value})"
+        )
         
         # Define the executor function for the fallback manager
         async def executor(request: AgentRequest) -> Union[AsyncIterator[AgentResponse], AgentResponse]:
             return await self.run(request, stream=stream)
         
         # Use the fallback manager's catch method
-        return await self.fallback_manager.catch(payload, executor)
+        return await self.fallback_manager.catch(fallback_payload, executor)
 
 
     
