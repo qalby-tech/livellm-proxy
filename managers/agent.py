@@ -27,7 +27,7 @@ from models.common import ProviderKind, ContextOverflowStrategyType, FallbackStr
 from models.agent.tools import WebSearchInput, MCPStreamableServerInput, ToolKind, ToolInput
 from models.agent.chat import MessageRole, TextMessage, BinaryMessage, ToolCallMessage, ToolReturnMessage
 from models.agent.agent import AgentRequest, AgentResponse, AgentResponseUsage, OutputSchema, ContextOverflowStrategy
-from models.fallback import AgentFallbackRequest
+from models.fallback import AgentFallbackRequest, FallbackStrategy
 from managers.config import ConfigManager
 from managers.fallback import FallbackManager
 from managers.context import ContextOverflowManager
