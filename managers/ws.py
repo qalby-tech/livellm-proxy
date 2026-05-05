@@ -8,7 +8,11 @@ from models.audio.transcribe import TranscribeRequest, TranscribeResponse
 from typing import AsyncIterator, Union
 from pydantic import BaseModel, TypeAdapter
 import base64
+import logging
+from contextlib import suppress
 from fastapi import WebSocket
+
+logger = logging.getLogger(__name__)
 
 class WsManager:
     def __init__(self, agent_manager: AgentManager, audio_manager: AudioManager):
@@ -111,10 +115,34 @@ class WsManager:
     async def handle_request_with_response(self, websocket: WebSocket, request: WsRequest) -> WsResponse:
         response = await self.handle_request(request)
         if isinstance(response, AsyncIterator):
-            async for chunk in response:
+            await self._drain_stream_to_websocket(response, websocket)
+        else:
+            try:
+                await websocket.send_json(response.model_dump())
+            except Exception:
+                pass  # Client disconnected, nothing to do
+    
+    async def _drain_stream_to_websocket(self, stream: AsyncIterator, websocket: WebSocket) -> None:
+        """
+        Drain a stream iterator and send each chunk to the WebSocket.
+        
+        Properly cleans up the generator on disconnect by aclosing it within
+        a try/except to suppress cleanup errors from nested contexts
+        (pydantic-ai agent, anyio TaskGroups, ContextVars).
+        """
+        try:
+            async for chunk in stream:
                 try:
                     await websocket.send_json(chunk.model_dump())
-                except Exception as e:
+                except Exception:
+                    # Client disconnected during streaming — break out cleanly
                     break
-        else:
-            await websocket.send_json(response.model_dump())
+        except Exception as e:
+            # Non-stream errors (e.g. validation, API errors) — try to notify client
+            logger.debug(f"Stream error: {e}")
+        finally:
+            # Always ensure the generator is properly cleaned up.
+            # Suppress errors from nested context cleanup (pydantic-ai, anyio)
+            # that can raise ValueError/RuntimeError during GeneratorExit handling.
+            with suppress(Exception):
+                await stream.aclose()

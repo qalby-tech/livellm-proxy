@@ -2,7 +2,9 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
 from typing import Annotated
 from managers.ws import WsManager
 from models.ws import WsRequest
+import logging
 
+logger = logging.getLogger(__name__)
 
 ws_router = APIRouter(prefix="/ws", tags=["ws"])
 
@@ -36,4 +38,11 @@ async def websocket_endpoint(websocket: WebSocket, ws_manager: WsManagerDep):
             request = WsRequest.model_validate(data)
             await ws_manager.handle_request_with_response(websocket, request)
     except WebSocketDisconnect:
+        pass
+    except RuntimeError:
+        # Starlette raises RuntimeError instead of WebSocketDisconnect
+        # when the WebSocket internal state becomes inconsistent after
+        # a client disconnect during an active stream (e.g., "WebSocket
+        # is not connected. Need to call "accept" first.")
+        logger.debug("WebSocket disconnected (RuntimeError)")
         pass
