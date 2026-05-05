@@ -11,7 +11,7 @@ import numpy as np
 from agents.voice.models.openai_stt import OpenAISTTModel, STTModelSettings
 from agents.voice.input import StreamedAudioInput
 from agents.voice.model import StreamedTranscriptionSession
-import logfire
+from managers import telemetry as logfire
 
 class OpenAIAudioAIService(AudioAIService):
     default_output_format = "pcm"

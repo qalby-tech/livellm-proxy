@@ -1,8 +1,8 @@
 """Context overflow management for handling large text inputs."""
 
 import tiktoken
-import logfire
 from typing import List, Optional, Callable, Awaitable, TypeVar
+from managers import telemetry as logfire
 from models.agent.agent import ContextOverflowStrategy
 
 

@@ -18,6 +18,8 @@ class ProviderKind(str, Enum):
     GOOGLE = "google"
     ANTHROPIC = "anthropic"
     GROQ = "groq"
+    # OpenAI-compatible self-hosted (uses /tokenize for accurate token counts)
+    VLLM = "vllm"
     # Audio providers
     ELEVENLABS = "elevenlabs"
 

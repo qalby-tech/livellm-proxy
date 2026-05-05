@@ -2,7 +2,7 @@ import asyncio
 from models.fallback import FallbackRequest, FallbackStrategy
 from models.common import BaseRequest
 from typing import Callable, Awaitable, TypeAlias, Any, List, Set
-import logfire
+from managers import telemetry as logfire
 
 Executor: TypeAlias = Callable[[BaseRequest], Awaitable[Any]]
 

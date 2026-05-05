@@ -1,7 +1,8 @@
 from pydantic_ai import Agent, StructuredDict
 from typing import Any, Optional, List, Union, Tuple, AsyncIterator
 import json
-import logfire
+from managers import telemetry as logfire
+from managers.telemetry import log_prompts_enabled, set_attrs, span as otel_span
 
 # tools
 from pydantic_ai import WebSearchTool
@@ -34,8 +35,32 @@ from managers.context import ContextOverflowManager
 import base64
 
 
+def _genai_attrs(payload: "AgentRequest", operation: str) -> dict:
+    """Build OTel GenAI semantic-convention attributes for a request."""
+    attrs: dict = {
+        "gen_ai.operation.name": operation,
+        "gen_ai.request.model": payload.model,
+        "gen_ai.provider.name": payload.provider_uid,
+    }
+    if payload.gen_config:
+        for key in ("temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty"):
+            v = payload.gen_config.get(key)
+            if v is not None:
+                attrs[f"gen_ai.request.{key}"] = v
+    if log_prompts_enabled():
+        try:
+            for i, m in enumerate(payload.messages):
+                attrs[f"gen_ai.prompt.{i}.role"] = m.role.value if hasattr(m.role, "value") else str(m.role)
+                content = getattr(m, "content", None)
+                if isinstance(content, str):
+                    attrs[f"gen_ai.prompt.{i}.content"] = content[:8000]
+        except Exception:
+            pass
+    return attrs
+
+
 class AgentManager:
-    
+
 
     def __init__(self, config_manager: ConfigManager, fallback_manager: Optional[FallbackManager] = None):
         self.config_manager = config_manager
@@ -55,6 +80,10 @@ class AgentManager:
             provider_client = OpenAIProvider(openai_client=provider_client)
             model_base = OpenAIResponsesModel
         elif provider_kind == ProviderKind.OPENAI_CHAT:
+            provider_client = OpenAIProvider(openai_client=provider_client)
+            model_base = OpenAIChatModel
+        elif provider_kind == ProviderKind.VLLM:
+            # vLLM speaks the OpenAI chat-completions protocol.
             provider_client = OpenAIProvider(openai_client=provider_client)
             model_base = OpenAIChatModel
         elif provider_kind == ProviderKind.GOOGLE:
@@ -351,56 +380,73 @@ class AgentManager:
         """
         Run agent without streaming (extracted for reuse).
         """
-        if payload.output_schema:
-            schema_dict = payload.output_schema.to_json_schema()
-            output_type = StructuredDict(
-                schema_dict,
-                name=payload.output_schema.title,
-                description=payload.output_schema.description
-            )
-            structured_agent: Agent[None, dict[str, Any]] = Agent(output_type=output_type)
-            async with structured_agent:
-                result = await structured_agent.run(
-                    model=model,
-                    user_prompt=prompt,
-                    message_history=history,
-                    builtin_tools=builtin_tools,
-                    toolsets=mcp_servers
+        with otel_span(f"chat {payload.model}", **_genai_attrs(payload, "chat")) as span:
+            if payload.output_schema:
+                schema_dict = payload.output_schema.to_json_schema()
+                output_type = StructuredDict(
+                    schema_dict,
+                    name=payload.output_schema.title,
+                    description=payload.output_schema.description
                 )
-                
-                usage = result.usage()
-                history_msgs = self.convert_history_to_msgs(result.all_messages()) if payload.include_history else None
-                output_json = json.dumps(result.output, ensure_ascii=False)
-                logfire.info(f"Request succeeded for provider={payload.provider_uid}, model={payload.model}, input_tokens={usage.input_tokens}, output_tokens={usage.output_tokens}")
-                return AgentResponse(
-                    output=output_json, 
-                    usage=AgentResponseUsage(
-                        input_tokens=usage.input_tokens,
-                        output_tokens=usage.output_tokens,
-                    ),
-                    history=history_msgs
-                )
-        else:
-            async with self.agent:
-                result = await self.agent.run(
-                    model=model,
-                    user_prompt=prompt,
-                    message_history=history,
-                    builtin_tools=builtin_tools,
-                    toolsets=mcp_servers
-                )
-                
-                usage = result.usage()
-                history_msgs = self.convert_history_to_msgs(result.all_messages()) if payload.include_history else None
-                logfire.info(f"Request succeeded for provider={payload.provider_uid}, model={payload.model}, input_tokens={usage.input_tokens}, output_tokens={usage.output_tokens}")
-                return AgentResponse(
-                    output=result.output, 
-                    usage=AgentResponseUsage(
-                        input_tokens=usage.input_tokens,
-                        output_tokens=usage.output_tokens,
-                    ),
-                    history=history_msgs
-                )
+                structured_agent: Agent[None, dict[str, Any]] = Agent(output_type=output_type)
+                async with structured_agent:
+                    result = await structured_agent.run(
+                        model=model,
+                        user_prompt=prompt,
+                        message_history=history,
+                        builtin_tools=builtin_tools,
+                        toolsets=mcp_servers
+                    )
+
+                    usage = result.usage()
+                    history_msgs = self.convert_history_to_msgs(result.all_messages()) if payload.include_history else None
+                    output_json = json.dumps(result.output, ensure_ascii=False)
+                    set_attrs(
+                        span,
+                        **{
+                            "gen_ai.usage.input_tokens": usage.input_tokens,
+                            "gen_ai.usage.output_tokens": usage.output_tokens,
+                            "gen_ai.completion.0.role": "assistant",
+                            **({"gen_ai.completion.0.content": output_json[:8000]} if log_prompts_enabled() else {}),
+                        },
+                    )
+                    return AgentResponse(
+                        output=output_json,
+                        usage=AgentResponseUsage(
+                            input_tokens=usage.input_tokens,
+                            output_tokens=usage.output_tokens,
+                        ),
+                        history=history_msgs
+                    )
+            else:
+                async with self.agent:
+                    result = await self.agent.run(
+                        model=model,
+                        user_prompt=prompt,
+                        message_history=history,
+                        builtin_tools=builtin_tools,
+                        toolsets=mcp_servers
+                    )
+
+                    usage = result.usage()
+                    history_msgs = self.convert_history_to_msgs(result.all_messages()) if payload.include_history else None
+                    set_attrs(
+                        span,
+                        **{
+                            "gen_ai.usage.input_tokens": usage.input_tokens,
+                            "gen_ai.usage.output_tokens": usage.output_tokens,
+                            "gen_ai.completion.0.role": "assistant",
+                            **({"gen_ai.completion.0.content": str(result.output)[:8000]} if log_prompts_enabled() else {}),
+                        },
+                    )
+                    return AgentResponse(
+                        output=result.output,
+                        usage=AgentResponseUsage(
+                            input_tokens=usage.input_tokens,
+                            output_tokens=usage.output_tokens,
+                        ),
+                        history=history_msgs
+                    )
         
     async def _run_stream_generator(
         self,
@@ -488,29 +534,45 @@ class AgentManager:
         builtin_tools: List,
         mcp_servers: List,
         include_history: bool = False,
-        output_schema: Optional[OutputSchema] = None
+        output_schema: Optional[OutputSchema] = None,
+        payload: Optional[AgentRequest] = None,
     ) -> AsyncIterator[AgentResponse]:
         """
         Validates first token generation before returning the stream.
         This ensures errors are caught early before the StreamingResponse is created.
         """
-        generator = self._run_stream_generator(
-            model=model,
-            prompt=prompt,
-            history=history,
-            builtin_tools=builtin_tools,
-            mcp_servers=mcp_servers,
-            include_history=include_history,
-            output_schema=output_schema
-        )
-        
-        # Get the first chunk to validate the stream works
-        first_chunk = await generator.__anext__()
-        
-        # If we got here, the stream is working, now yield everything
-        yield first_chunk
-        async for chunk in generator:
-            yield chunk
+        import time
+
+        attrs = _genai_attrs(payload, "chat") if payload else {"gen_ai.operation.name": "chat"}
+        with otel_span(f"chat {payload.model if payload else 'stream'}", **attrs) as span:
+            start = time.time()
+            generator = self._run_stream_generator(
+                model=model,
+                prompt=prompt,
+                history=history,
+                builtin_tools=builtin_tools,
+                mcp_servers=mcp_servers,
+                include_history=include_history,
+                output_schema=output_schema,
+            )
+
+            first_chunk = await generator.__anext__()
+            set_attrs(span, **{"gen_ai.server.time_to_first_token": time.time() - start})
+
+            yield first_chunk
+            last: Optional[AgentResponse] = first_chunk
+            async for chunk in generator:
+                last = chunk
+                yield chunk
+
+            if last is not None and last.usage:
+                set_attrs(
+                    span,
+                    **{
+                        "gen_ai.usage.input_tokens": last.usage.input_tokens,
+                        "gen_ai.usage.output_tokens": last.usage.output_tokens,
+                    },
+                )
     
     def _get_effective_context_config(
         self, 
@@ -689,7 +751,8 @@ class AgentManager:
                 builtin_tools=builtin_tools,
                 mcp_servers=mcp_servers,
                 include_history=payload.include_history,
-                output_schema=payload.output_schema
+                output_schema=payload.output_schema,
+                payload=payload,
             )
         else:
             # Use extracted method for non-streaming execution

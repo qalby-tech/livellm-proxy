@@ -4,7 +4,7 @@ from audio_ai.base import AudioAIService
 from models.audio.speak import SpeakRequest, SpeakResponse, SpeakStreamResponse
 from typing import Tuple, AsyncIterator, Optional
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse
-import logfire
+from managers import telemetry as logfire
 
 
 class ElevenLabsAudioAIService(AudioAIService):

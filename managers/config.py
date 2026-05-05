@@ -4,13 +4,13 @@ import asyncio
 import json
 from typing import Dict, Optional, Tuple, TypeAlias, Union
 
-import logfire
 from anthropic import AsyncAnthropic
 from elevenlabs import AsyncElevenLabs
 from google import genai
 from groq import AsyncGroq
 from openai import AsyncOpenAI
 
+from managers import telemetry as logfire
 from managers.redis import RedisManager
 from models.common import ProviderKind, Settings, ModelConfig
 
@@ -34,6 +34,28 @@ class ConfigManager:
         self.configs: Dict[str, Settings] = {}  # uid → Settings
         self.providers: Dict[str, ProviderClient] = {}  # uid → SDK client instance
         self.redis_manager = redis_manager
+        # Lazily-built per-uid token counters (provider-native where possible).
+        self._token_counters: Dict[str, "object"] = {}
+
+    def get_token_counter(self, uid: str):
+        """Return the correct token counter for a given provider config.
+        Built lazily on first use; rebuilt automatically when a provider is
+        upserted or deleted via Pub/Sub."""
+        from managers.tokenizer import make_counter  # local import to avoid cycle
+
+        if uid in self._token_counters:
+            return self._token_counters[uid]
+        if uid not in self.configs:
+            raise ValueError(f"Provider config '{uid}' not found")
+        settings = self.configs[uid]
+        counter = make_counter(
+            provider_kind=settings.provider,
+            client=self.providers.get(uid),
+            base_url=settings.base_url,
+            api_key=settings.api_key.get_secret_value(),
+        )
+        self._token_counters[uid] = counter
+        return counter
 
     # ------------------------------------------------------------------
     # Startup / persistence
@@ -65,6 +87,7 @@ class ConfigManager:
         """
         self.configs[config.uid] = config
         self.providers[config.uid] = self.create_provider_client(config)
+        self._token_counters.pop(config.uid, None)
 
         # Serialize — replace the masked SecretStr with the real value
         settings_dict = config.model_dump(mode="json")
@@ -91,6 +114,7 @@ class ConfigManager:
 
         self.configs.pop(uid)
         self.providers.pop(uid)
+        self._token_counters.pop(uid, None)
 
         await self.redis_manager.delete_provider_settings(uid)
 
@@ -151,7 +175,11 @@ class ConfigManager:
     def create_provider_client(self, settings: Settings) -> ProviderClient:
         api_key = settings.api_key.get_secret_value()
 
-        if settings.provider in (ProviderKind.OPENAI, ProviderKind.OPENAI_CHAT):
+        if settings.provider in (
+            ProviderKind.OPENAI,
+            ProviderKind.OPENAI_CHAT,
+            ProviderKind.VLLM,
+        ):
             return AsyncOpenAI(api_key=api_key, base_url=settings.base_url)
         elif settings.provider == ProviderKind.GOOGLE:
             return genai.Client(
@@ -242,6 +270,7 @@ class ConfigManager:
                 settings = Settings(**settings_dict)
                 self.configs[uid] = settings
                 self.providers[uid] = self.create_provider_client(settings)
+                self._token_counters.pop(uid, None)
                 logfire.info(f"Hot-reloaded provider '{uid}' via Pub/Sub")
             except Exception as e:
                 logfire.error(f"Failed to hot-reload provider '{uid}': {e}")
@@ -250,6 +279,7 @@ class ConfigManager:
             if uid in self.configs:
                 self.configs.pop(uid, None)
                 self.providers.pop(uid, None)
+                self._token_counters.pop(uid, None)
                 logfire.info(f"Hot-removed provider '{uid}' via Pub/Sub")
 
         else:

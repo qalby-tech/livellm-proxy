@@ -11,7 +11,7 @@ from models.ws import WsResponse, WsAction, WsStatus
 from typing import AsyncIterator
 from starlette.websockets import WebSocketState
 from datetime import datetime
-import logfire
+from managers import telemetry as logfire
 
 
 transcription_ws_router = APIRouter(prefix="/ws", tags=["transcription_ws"])

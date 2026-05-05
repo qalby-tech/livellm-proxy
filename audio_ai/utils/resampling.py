@@ -2,7 +2,7 @@ from math import gcd
 from scipy.signal import resample_poly
 import numpy as np
 from typing import AsyncIterator, Optional
-import logfire
+from managers import telemetry as logfire
 import asyncio
 
 # Constants for PCM16 audio processing

@@ -3,7 +3,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.exceptions import HTTPException
 from typing import Annotated, Optional, Union
 import json
-import logfire
+from managers import telemetry as logfire
 from managers.audio import AudioManager
 from models.audio.speak import SpeakRequest, SpeakResponse
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse

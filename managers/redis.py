@@ -5,8 +5,9 @@ import json
 from typing import Any, Dict, Optional
 from urllib.parse import quote, urlparse, urlunparse
 
-import logfire
 import redis.asyncio as redis
+
+from managers import telemetry as logfire
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC

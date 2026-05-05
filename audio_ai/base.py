@@ -6,7 +6,7 @@ from models.audio.transcribe import TranscribeRequest, TranscribeResponse
 from models.audio.transcription_ws import TranscriptionWsResponse
 from audio_ai.utils import ChunkCollector, Resampler
 from audio_ai.utils.encoding import encode, decode, encode_from_pcm_stream, decode_into_pcm_stream
-import logfire
+from managers import telemetry as logfire
 import time
 
 

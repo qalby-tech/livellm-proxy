@@ -5,7 +5,7 @@ from typing import Annotated, AsyncIterator, Union
 from managers.agent import AgentManager
 from models.agent.agent import AgentRequest, AgentResponse
 from models.fallback import AgentFallbackRequest
-import logfire
+from managers import telemetry as logfire
 
 agent_router = APIRouter(prefix="/agent", tags=["agent"])
 

@@ -1,15 +1,15 @@
 import asyncio
 import logging
-import os
 from contextlib import asynccontextmanager
-from logging import basicConfig
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
-import logfire
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import Response
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from managers import telemetry as tel
 from managers.agent import AgentManager
 from managers.audio import AudioManager
 from managers.config import ConfigManager
@@ -28,24 +28,28 @@ from routers.ws import ws_router
 
 class PingFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        message = record.getMessage()
-        return "/ping" not in message
-
-
-def scrubbing_callback(m: logfire.ScrubMatch):
-    if m.path == ("message", "e") or m.path == ("attributes", "e"):
-        return m.value
+        return "/ping" not in record.getMessage()
 
 
 class EnvSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-    logfire_write_token: Optional[str] = Field(None, description="Logfire write token")
     otel_exporter_otlp_endpoint: Optional[str] = Field(
-        None, description="OTEL exporter OTLP endpoint"
+        None, description="Base OTLP/HTTP endpoint, e.g. http://otel-collector:4318"
+    )
+    otel_service_name: str = Field(
+        "livellm-proxy", description="OTel service.name resource attribute"
+    )
+    otel_environment: Optional[str] = Field(
+        None, description="deployment.environment.name (e.g. prod, staging)"
+    )
+    log_prompts: bool = Field(
+        False, description="If true, prompt/completion text is recorded on spans"
+    )
+    default_project: Optional[str] = Field(
+        None, description="Fallback project name when X-Project header is absent"
     )
     host: str = Field("0.0.0.0", description="Host")
     port: int = Field(8000, description="Port")
-    # Redis is the sole persistence backend — required.
     redis_url: str = Field(
         ..., description="Redis URL (required). Example: redis://localhost:6379/0"
     )
@@ -55,39 +59,49 @@ class EnvSettings(BaseSettings):
     )
     token_count_overhead: float = Field(
         1.20,
-        description="Safety overhead multiplier for tiktoken token counting (e.g. 1.20 for 20 %% buffer)",
+        description="Safety overhead multiplier for tiktoken token counting (e.g. 1.20 for 20%% buffer)",
     )
 
 
 env_settings = EnvSettings()
 
+# --- OpenTelemetry tracing must be set up before FastAPI is instrumented ---
+import os
+
+if env_settings.log_prompts:
+    os.environ["LOG_PROMPTS"] = "true"
+
+tel.configure_tracing(
+    service_name=env_settings.otel_service_name,
+    otlp_endpoint=env_settings.otel_exporter_otlp_endpoint,
+    environment=env_settings.otel_environment,
+)
+
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("uvicorn.access").addFilter(PingFilter())
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # --- Token count overhead ---
     if env_settings.token_count_overhead != 1.20:
         set_token_count_overhead(env_settings.token_count_overhead)
 
-    # --- Redis (required) ---
     app.state.redis_manager = RedisManager(
         redis_url=env_settings.redis_url,
         encryption_salt=env_settings.encryption_salt,
     )
     await app.state.redis_manager.connect()
-    logfire.info("Redis manager connected")
+    tel.info("Redis manager connected")
 
-    # --- Config manager — loads all providers from Redis on startup ---
     app.state.config_manager = ConfigManager(
         redis_manager=app.state.redis_manager,
     )
     await app.state.config_manager.load_providers_from_persistence()
 
-    # --- Start Pub/Sub listener so every replica hot-reloads on changes ---
     app.state.pubsub_task = asyncio.create_task(
         app.state.config_manager.pubsub_listener_task()
     )
 
-    # --- Business logic managers ---
     app.state.fallback_manager = FallbackManager()
     app.state.agent_manager = AgentManager(
         config_manager=app.state.config_manager,
@@ -107,7 +121,6 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # --- Shutdown ---
     app.state.pubsub_task.cancel()
     try:
         await app.state.pubsub_task
@@ -124,28 +137,22 @@ app.include_router(providers_router)
 app.include_router(ws_router)
 app.include_router(transcription_ws_router)
 
-# --- Logfire ---
-os.environ["LOGFIRE_DISTRIBUTED_TRACING"] = "false"
-os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = (
-    env_settings.otel_exporter_otlp_endpoint or ""
-)
-logfire.configure(
-    service_name="livellm-proxy",
-    send_to_logfire="if-token-present",
-    token=env_settings.logfire_write_token,
-    scrubbing=logfire.ScrubbingOptions(callback=scrubbing_callback),
-)
 
-logfire_handler = logfire.LogfireLoggingHandler()
-basicConfig(handlers=[logfire_handler], level=logging.INFO)
+@app.middleware("http")
+async def project_baggage_middleware(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    project = request.headers.get(tel.PROJECT_HEADER) or env_settings.default_project
+    token = tel.attach_project(project) if project else None
+    try:
+        return await call_next(request)
+    finally:
+        if token is not None:
+            tel.detach_project(token)
 
-uvicorn_access_logger = logging.getLogger("uvicorn.access")
-uvicorn_access_logger.addFilter(PingFilter())
 
-logfire.instrument_pydantic_ai()
-logfire.instrument_mcp()
-logfire.instrument_fastapi(app, capture_headers=True, excluded_urls=["/ping"])
-logfire.instrument_openai_agents()
+# Instrument FastAPI for HTTP server spans (excluding the noisy /ping endpoint).
+FastAPIInstrumentor.instrument_app(app, excluded_urls="/ping")
 
 
 @app.get("/ping")
