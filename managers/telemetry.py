@@ -80,6 +80,28 @@ def configure_tracing(
     _tracer = trace.get_tracer("livellm-proxy")
 
 
+def configure_pydantic_ai_instrumentation() -> None:
+    """Turn on pydantic-ai's native OTel GenAI instrumentation.
+
+    pydantic-ai already follows the OpenTelemetry GenAI semantic convention
+    (v2): it emits a `chat <model>` span with `gen_ai.input.messages`,
+    `gen_ai.output.messages`, `gen_ai.system_instructions`, plus tool-call
+    parts and usage metrics. Without this call, no content is recorded and
+    Tempo / Grafana / Phoenix / Logfire UIs show empty trace details.
+
+    Whether to include message content is gated by `LOG_PROMPTS` — the same
+    env var the rest of this module honours.
+    """
+    from pydantic_ai import Agent, InstrumentationSettings
+
+    settings = InstrumentationSettings(
+        include_content=log_prompts_enabled(),
+        include_binary_content=log_prompts_enabled(),
+        version=2,
+    )
+    Agent.instrument_all(settings)
+
+
 def tracer() -> trace.Tracer:
     """Return the configured tracer (configure_tracing must have run)."""
     if _tracer is None:

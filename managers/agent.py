@@ -2,7 +2,7 @@ from pydantic_ai import Agent, StructuredDict
 from typing import Any, Optional, List, Union, Tuple, AsyncIterator
 import json
 from managers import telemetry as logfire
-from managers.telemetry import log_prompts_enabled, set_attrs, span as otel_span
+from managers.telemetry import set_attrs, span as otel_span
 
 # tools
 from pydantic_ai import WebSearchTool
@@ -36,7 +36,14 @@ import base64
 
 
 def _genai_attrs(payload: "AgentRequest", operation: str) -> dict:
-    """Build OTel GenAI semantic-convention attributes for a request."""
+    """Build OTel GenAI semantic-convention attributes for the proxy-level span.
+
+    Message content itself is recorded by pydantic-ai's native instrumentation
+    on its child `chat <model>` span (`gen_ai.input.messages` /
+    `gen_ai.output.messages`). The proxy's outer span only carries metadata
+    that pydantic-ai can't know — the configured provider UID, the requested
+    operation, and the request parameters as the proxy received them.
+    """
     attrs: dict = {
         "gen_ai.operation.name": operation,
         "gen_ai.request.model": payload.model,
@@ -47,15 +54,6 @@ def _genai_attrs(payload: "AgentRequest", operation: str) -> dict:
             v = payload.gen_config.get(key)
             if v is not None:
                 attrs[f"gen_ai.request.{key}"] = v
-    if log_prompts_enabled():
-        try:
-            for i, m in enumerate(payload.messages):
-                attrs[f"gen_ai.prompt.{i}.role"] = m.role.value if hasattr(m.role, "value") else str(m.role)
-                content = getattr(m, "content", None)
-                if isinstance(content, str):
-                    attrs[f"gen_ai.prompt.{i}.content"] = content[:8000]
-        except Exception:
-            pass
     return attrs
 
 
@@ -406,8 +404,6 @@ class AgentManager:
                         **{
                             "gen_ai.usage.input_tokens": usage.input_tokens,
                             "gen_ai.usage.output_tokens": usage.output_tokens,
-                            "gen_ai.completion.0.role": "assistant",
-                            **({"gen_ai.completion.0.content": output_json[:8000]} if log_prompts_enabled() else {}),
                         },
                     )
                     return AgentResponse(
@@ -435,8 +431,6 @@ class AgentManager:
                         **{
                             "gen_ai.usage.input_tokens": usage.input_tokens,
                             "gen_ai.usage.output_tokens": usage.output_tokens,
-                            "gen_ai.completion.0.role": "assistant",
-                            **({"gen_ai.completion.0.content": str(result.output)[:8000]} if log_prompts_enabled() else {}),
                         },
                     )
                     return AgentResponse(

@@ -43,7 +43,7 @@ class EnvSettings(BaseSettings):
         None, description="deployment.environment.name (e.g. prod, staging)"
     )
     log_prompts: bool = Field(
-        False, description="If true, prompt/completion text is recorded on spans"
+        True, description="If true, prompt/completion text is recorded on spans"
     )
     default_project: Optional[str] = Field(
         None, description="Fallback project name when X-Project header is absent"
@@ -68,14 +68,14 @@ env_settings = EnvSettings()
 # --- OpenTelemetry tracing must be set up before FastAPI is instrumented ---
 import os
 
-if env_settings.log_prompts:
-    os.environ["LOG_PROMPTS"] = "true"
+os.environ["LOG_PROMPTS"] = "true" if env_settings.log_prompts else "false"
 
 tel.configure_tracing(
     service_name=env_settings.otel_service_name,
     otlp_endpoint=env_settings.otel_exporter_otlp_endpoint,
     environment=env_settings.otel_environment,
 )
+tel.configure_pydantic_ai_instrumentation()
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("uvicorn.access").addFilter(PingFilter())
