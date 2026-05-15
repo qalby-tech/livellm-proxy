@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from dataclasses import dataclass
 from typing import Dict, Optional, Tuple, TypeAlias, Union
 
 from anthropic import AsyncAnthropic
@@ -14,8 +15,20 @@ from managers import telemetry as logfire
 from managers.redis import RedisManager
 from models.common import ProviderKind, Settings, ModelConfig
 
+
+@dataclass
+class LivellmClient:
+    """Lightweight 'client' for the livellm-native realtime ASR provider.
+
+    There's no SDK to instantiate — we just need to remember the WebSocket
+    base URL and bearer token, which the realtime service consumes directly.
+    """
+    base_url: str
+    api_key: Optional[str] = None
+
+
 ProviderClient: TypeAlias = Union[
-    AsyncOpenAI, genai.Client, AsyncAnthropic, AsyncGroq, AsyncElevenLabs
+    AsyncOpenAI, genai.Client, AsyncAnthropic, AsyncGroq, AsyncElevenLabs, LivellmClient
 ]
 
 
@@ -192,6 +205,13 @@ class ConfigManager:
             return AsyncGroq(api_key=api_key, base_url=settings.base_url)
         elif settings.provider == ProviderKind.ELEVENLABS:
             return AsyncElevenLabs(api_key=api_key, base_url=settings.base_url)
+        elif settings.provider == ProviderKind.LIVELLM:
+            if not settings.base_url:
+                raise ValueError(
+                    f"livellm provider '{settings.uid}' requires base_url "
+                    "(URL of the asr-rust-ru server, e.g. http://asr:8080)"
+                )
+            return LivellmClient(base_url=settings.base_url, api_key=api_key)
         else:
             raise ValueError(f"Provider '{settings.provider}' is not supported")
 

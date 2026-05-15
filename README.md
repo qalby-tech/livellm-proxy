@@ -396,6 +396,80 @@ asyncio.run(transcribe_audio())
 
 If an error occurs during transcription, the WebSocket will be closed with an appropriate error code and reason. Always implement proper error handling and reconnection logic in production applications.
 
+---
+
+#### `provider=livellm` — self-hosted realtime ASR with built-in VAD
+
+The `livellm` provider talks to a livellm-compatible WebSocket ASR endpoint
+(currently [`asr-rust-ru`](https://github.com/XvKuoMing/asr-rust-ru) — a Rust
+RNNT model that ships a `/v1/audio/transcriptions/ws` endpoint returning text
+**plus a `speech_prob` probability per chunk**). The proxy uses that probability
+to run VAD client-side: no separate VAD model is required — the ASR itself
+decides when speech starts and ends.
+
+**Register the provider:**
+
+```bash
+curl -X POST http://localhost:8000/livellm/providers/config \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "uid": "asr-ru-1",
+    "provider": "livellm",
+    "base_url": "http://asr-rust-ru:8080",
+    "api_key": "optional-bearer-token"
+  }'
+```
+
+`base_url` points at the upstream HTTP(S) server. The proxy rewrites the scheme
+to `ws://` / `wss://` and appends `/v1/audio/transcriptions/ws?sample_rate=16000`
+when opening the upstream socket.
+
+**Connect from a client (same wire protocol as the OpenAI transcription_ws):**
+
+```python
+ws_url = "ws://localhost:8000/livellm/ws/transcription"
+init = {
+    "provider_uid": "asr-ru-1",
+    "model": "gigaam",                  # accepted but currently a no-op
+    "language": "ru",
+    "input_sample_rate": 16000,
+    "input_audio_format": "audio/pcm",
+    "gen_config": {
+        "speech_start_threshold": 0.55,  # cross above → start a turn
+        "speech_end_threshold":   0.30,  # cross below → end a turn
+        "start_hold_chunks":       2,    # need N consecutive chunks above start
+        "end_hold_chunks":         4,    # need N consecutive chunks below end
+        "min_token_confidence":    0.0,  # drop deltas with avg token prob below this
+        "suppress_silence":      true,   # don't emit deltas while VAD says silence
+        "dedupe":                true,   # skip a delta if text matches the previous
+        "max_utterance_seconds":  30.0   # force-flush long turns
+    }
+}
+```
+
+After init, send `{"audio": "<base64 pcm16>"}` chunks exactly as you would for
+the OpenAI provider. The proxy resamples to 16 kHz (asr-rust-ru's required rate)
+and forwards each chunk to the upstream. Inbound deltas are filtered by the VAD
+state machine and re-emitted as ordinary `TranscriptionWsResponse` messages —
+no API change from the consumer's point of view.
+
+**VAD knobs (`gen_config`):**
+
+| Field                    | Default | Effect                                                     |
+|--------------------------|---------|------------------------------------------------------------|
+| `speech_start_threshold` | `0.55`  | `speech_prob` above this contributes to a start streak     |
+| `speech_end_threshold`   | `0.30`  | `speech_prob` below this contributes to an end streak      |
+| `start_hold_chunks`      | `2`     | Consecutive above-start chunks required to enter speech    |
+| `end_hold_chunks`        | `4`     | Consecutive below-end chunks required to leave speech      |
+| `min_token_confidence`   | `0.0`   | Drop a delta whose mean emitted-token softmax is below this|
+| `suppress_silence`       | `true`  | Don't forward deltas while VAD reports silence             |
+| `dedupe`                 | `true`  | Skip a delta if it duplicates the previous emitted text    |
+| `max_utterance_seconds`  | `30.0`  | Hard cap before forcing a server-side buffer flush         |
+
+These thresholds operate on the ASR's own `speech_prob = 1 − mean P(blank)`
+signal, computed by the upstream over every encoder frame in the chunk — so the
+"VAD" is just the ASR being honest about whether it's hearing speech.
+
 ### Provider Configuration Management
 
 #### Get All Provider Configurations

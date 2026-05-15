@@ -38,11 +38,12 @@ import base64
 def _genai_attrs(payload: "AgentRequest", operation: str) -> dict:
     """Build OTel GenAI semantic-convention attributes for the proxy-level span.
 
-    Message content itself is recorded by pydantic-ai's native instrumentation
-    on its child `chat <model>` span (`gen_ai.input.messages` /
-    `gen_ai.output.messages`). The proxy's outer span only carries metadata
-    that pydantic-ai can't know — the configured provider UID, the requested
-    operation, and the request parameters as the proxy received them.
+    The proxy-level span uses `invoke_agent` (the agent-orchestration operation
+    per the OTel GenAI semconv), so it's clearly distinct from pydantic-ai's
+    child `chat <model>` span, which is where message content lives
+    (`gen_ai.input.messages` / `gen_ai.output.messages`). The proxy's outer
+    span carries metadata pydantic-ai can't know — the configured provider
+    UID and the request parameters as the proxy received them.
     """
     attrs: dict = {
         "gen_ai.operation.name": operation,
@@ -378,7 +379,7 @@ class AgentManager:
         """
         Run agent without streaming (extracted for reuse).
         """
-        with otel_span(f"chat {payload.model}", **_genai_attrs(payload, "chat")) as span:
+        with otel_span(f"invoke_agent {payload.model}", **_genai_attrs(payload, "invoke_agent")) as span:
             if payload.output_schema:
                 schema_dict = payload.output_schema.to_json_schema()
                 output_type = StructuredDict(
@@ -537,8 +538,8 @@ class AgentManager:
         """
         import time
 
-        attrs = _genai_attrs(payload, "chat") if payload else {"gen_ai.operation.name": "chat"}
-        with otel_span(f"chat {payload.model if payload else 'stream'}", **attrs) as span:
+        attrs = _genai_attrs(payload, "invoke_agent") if payload else {"gen_ai.operation.name": "invoke_agent"}
+        with otel_span(f"invoke_agent {payload.model if payload else 'stream'}", **attrs) as span:
             start = time.time()
             generator = self._run_stream_generator(
                 model=model,

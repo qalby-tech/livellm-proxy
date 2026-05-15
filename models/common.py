@@ -22,6 +22,9 @@ class ProviderKind(str, Enum):
     VLLM = "vllm"
     # Audio providers
     ELEVENLABS = "elevenlabs"
+    # livellm-native realtime transcription (WebSocket, returns per-chunk
+    # probability + speech_prob — useful for client-side VAD)
+    LIVELLM = "livellm"
 
 
 class ContextOverflowStrategyType(str, Enum):

@@ -1,5 +1,6 @@
 from managers.agent import AgentManager
 from managers.audio import AudioManager
+from managers.telemetry import span as otel_span
 from models.ws import WsRequest, WsResponse, WsAction, WsStatus
 from models.fallback import AgentFallbackRequest, TranscribeFallbackRequest, AudioFallbackRequest
 from models.agent.agent import AgentRequest, AgentResponse
@@ -113,14 +114,21 @@ class WsManager:
             )
     
     async def handle_request_with_response(self, websocket: WebSocket, request: WsRequest) -> WsResponse:
-        response = await self.handle_request(request)
-        if isinstance(response, AsyncIterator):
-            await self._drain_stream_to_websocket(response, websocket)
-        else:
-            try:
-                await websocket.send_json(response.model_dump())
-            except Exception:
-                pass  # Client disconnected, nothing to do
+        with otel_span(
+            f"ws {request.action.value}",
+            **{
+                "ws.action": request.action.value,
+                "ws.session_id": request.session_id,
+            },
+        ):
+            response = await self.handle_request(request)
+            if isinstance(response, AsyncIterator):
+                await self._drain_stream_to_websocket(response, websocket)
+            else:
+                try:
+                    await websocket.send_json(response.model_dump())
+                except Exception:
+                    pass  # Client disconnected, nothing to do
     
     async def _drain_stream_to_websocket(self, stream: AsyncIterator, websocket: WebSocket) -> None:
         """

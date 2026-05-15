@@ -105,7 +105,10 @@ async def transcription_websocket_endpoint(
                 transcription=transcription,
                 received_at=datetime.now()
             )
-            await websocket.send_json(response.model_dump())
+            # `model_dump_json()` handles datetime serialization that the plain
+            # `dict`-based `send_json(model_dump())` cannot. send_text avoids the
+            # double-encode round-trip.
+            await websocket.send_text(response.model_dump_json())
         except WebSocketException as e:
             if e.code == 1005: 
                 # client disconnected
