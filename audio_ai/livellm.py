@@ -98,6 +98,11 @@ class LivellmRealtimeTranscriptionService(AudioRealtimeTranscriptionService):
         self._end_streak = 0
         self._last_emitted_text = ""
         self._segment_start_ts: Optional[float] = None
+        # Set by the receiver when VAD detects end-of-speech; the sender
+        # consumes it on its next chunk to flush asr-rust-ru's accumulator
+        # so each turn is transcribed independently (otherwise the buffer
+        # grows for the whole call and every chunk re-transcribes the lot).
+        self._pending_final: bool = False
 
     @property
     def default_sample_rate(self) -> int:
@@ -150,9 +155,15 @@ class LivellmRealtimeTranscriptionService(AudioRealtimeTranscriptionService):
         async for chunk in audio_source:
             if not chunk:
                 continue
-            # Optional hard-cap on segment length: ask the server to flush.
+            # Decide whether to ask the server to flush its buffer.
             do_final = False
-            if self._segment_start_ts is not None and self._max_utterance_s > 0:
+            if self._pending_final:
+                # VAD detected end-of-speech on the receive side.
+                do_final = True
+                self._pending_final = False
+            elif self._segment_start_ts is not None and self._max_utterance_s > 0:
+                # Hard-cap fallback: flush a single utterance that has run
+                # past max_utterance_seconds without the VAD calling it.
                 if time.monotonic() - self._segment_start_ts > self._max_utterance_s:
                     do_final = True
                     self._segment_start_ts = None
@@ -223,8 +234,11 @@ class LivellmRealtimeTranscriptionService(AudioRealtimeTranscriptionService):
                     self._in_speech = False
                     self._start_streak = 0
                     self._segment_start_ts = None
+                    # Ask the sender to flush asr-rust-ru's buffer on its
+                    # next outbound chunk so the next turn starts clean.
+                    self._pending_final = True
                     logfire.info(
-                        f"livellm: speech END (speech_prob={speech_prob:.2f})"
+                        f"livellm: speech END (speech_prob={speech_prob:.2f}) — requesting flush"
                     )
 
                 # ─── Filtering ──────────────────────────────────────────
