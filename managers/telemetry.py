@@ -107,6 +107,14 @@ def configure_mlflow_tracing(
     # and continue without tracing. (Per-request trace export is already async /
     # best-effort via MLFLOW_ENABLE_ASYNC_TRACE_LOGGING, on by default.)
     try:
+        # `configure_tracing()` already installed the global OTel TracerProvider
+        # (OTLP/Tempo) that pydantic-ai emits spans to. By default MLflow uses an
+        # *isolated* provider and would never see those spans. Setting this to
+        # "false" makes MLflow attach its span processor to the existing global
+        # provider instead, so pydantic-ai spans are exported to MLflow too.
+        # setdefault: an explicit env override (e.g. from the chart) wins.
+        os.environ.setdefault("MLFLOW_USE_DEFAULT_TRACER_PROVIDER", "false")
+
         import mlflow
 
         mlflow.set_tracking_uri(tracking_uri)
