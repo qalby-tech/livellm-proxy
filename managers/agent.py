@@ -501,10 +501,11 @@ class AgentManager:
                     builtin_tools=builtin_tools,
                     toolsets=mcp_servers
                 ) as stream_response:
-                    # Stream incremental deltas, not cumulative text: each
-                    # chunk's ``output`` is only the newly generated piece.
-                    # Consumers accumulate the chunks themselves.
-                    async for text in stream_response.stream_text(delta=True, debounce_by=None):
+                    # Stream cumulative output: each chunk's ``output`` is the
+                    # full text generated so far (clients diff it themselves).
+                    # NOTE: must stay cumulative — livellm_client_py / aiphone
+                    # rely on this; delta streaming breaks their reassembly.
+                    async for text in stream_response.stream_output(debounce_by=None):
                         usage = stream_response.usage()
                         yield AgentResponse(
                             output=text,
