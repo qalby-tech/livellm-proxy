@@ -12,6 +12,7 @@ from typing import AsyncIterator
 from starlette.websockets import WebSocketState
 from datetime import datetime
 from managers import telemetry as logfire
+from managers.telemetry import mlflow_span
 
 
 transcription_ws_router = APIRouter(prefix="/ws", tags=["transcription_ws"])
@@ -117,16 +118,33 @@ async def transcription_websocket_endpoint(
             else:
                 raise e
 
-    try:        
-        # Start the realtime transcription (this will run until audio source is exhausted)
-        await service.realtime_transcribe(
-            audio_source=audio_source(),
-            audio_sink=send_transcription,
-            input_audio_format=init_request.input_audio_format,
-            input_sample_rate=init_request.input_sample_rate,
-        )
-    except WebSocketDisconnect:
-        logfire.info("WebSocket disconnected")
-    finally:
-        await service.disconnect()
+    # Collect transcriptions so the realtime session can be recorded as one
+    # MLflow span (input: provider/model/format, output: the transcripts).
+    session_transcripts: list[str] = []
+
+    async def traced_sink(transcription: str) -> None:
+        session_transcripts.append(transcription)
+        await send_transcription(transcription)
+
+    with mlflow_span("asr.realtime", span_type="LLM", inputs={
+        "provider_uid": init_request.provider_uid,
+        "model": init_request.model,
+        "language": init_request.language,
+        "input_sample_rate": init_request.input_sample_rate,
+        "input_audio_format": str(init_request.input_audio_format),
+    }) as span:
+        try:
+            # Start the realtime transcription (runs until the audio source is exhausted)
+            await service.realtime_transcribe(
+                audio_source=audio_source(),
+                audio_sink=traced_sink,
+                input_audio_format=init_request.input_audio_format,
+                input_sample_rate=init_request.input_sample_rate,
+            )
+        except WebSocketDisconnect:
+            logfire.info("WebSocket disconnected")
+        finally:
+            if span is not None:
+                span.set_outputs({"transcriptions": session_transcripts})
+            await service.disconnect()
         

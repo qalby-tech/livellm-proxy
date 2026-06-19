@@ -11,6 +11,7 @@ from models.fallback import AudioFallbackRequest, TranscribeFallbackRequest, Fal
 
 # managers
 from managers import telemetry as logfire
+from managers.telemetry import mlflow_span
 from managers.config import ConfigManager, ProviderClient
 from managers.fallback import FallbackManager
 
@@ -103,12 +104,29 @@ class AudioManager:
             uid=payload.provider_uid,
             model=payload.model
         )
-        
-        # Call the speak method on the service
-        if stream:
-            return await service.stream_speak(payload)
-        else:
-            return await service.speak(payload)
+
+        # Call the speak method on the service (traced for MLflow when active)
+        with mlflow_span("tts.speak", span_type="LLM", inputs={
+            "provider_uid": payload.provider_uid,
+            "model": payload.model,
+            "voice": payload.voice,
+            "mime_type": str(payload.mime_type),
+            "sample_rate": payload.sample_rate,
+            "stream": stream,
+            "text": payload.text,
+        }) as span:
+            if stream:
+                # Streaming: the span records the request; the audio is produced
+                # by the returned generator after this span closes.
+                return await service.stream_speak(payload)
+            result = await service.speak(payload)
+            if span is not None:
+                span.set_outputs({
+                    "audio_bytes": len(result.audio),
+                    "content_type": result.content_type,
+                    "sample_rate": result.sample_rate,
+                })
+            return result
     
     async def transcribe(
         self, 
@@ -129,9 +147,18 @@ class AudioManager:
             uid=payload.provider_uid,
             model=payload.model
         )
-        
-        # Call the transcribe method on the service
-        return await service.transcribe(payload)
+
+        # Call the transcribe method on the service (traced for MLflow when active)
+        with mlflow_span("asr.transcribe", span_type="LLM", inputs={
+            "provider_uid": payload.provider_uid,
+            "model": payload.model,
+            "language": payload.language,
+            "file": payload.file[0] if payload.file else None,
+        }) as span:
+            result = await service.transcribe(payload)
+            if span is not None:
+                span.set_outputs({"text": result.text, "language": result.language})
+            return result
     
     async def safe_speak(
         self,

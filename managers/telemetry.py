@@ -137,11 +137,47 @@ def configure_mlflow_tracing(
         )
         return
 
+    global _mlflow_tracing_enabled
+    _mlflow_tracing_enabled = True
     info(
         "MLflow pydantic-ai tracing enabled (tracking_uri=%s, experiment=%s)",
         tracking_uri,
         experiment_name or "<default>",
     )
+
+
+# Set once MLflow tracing is successfully configured. Gates `mlflow_span()` so
+# non-pydantic-ai paths only create spans when MLflow is actually active.
+_mlflow_tracing_enabled: bool = False
+
+
+@contextmanager
+def mlflow_span(
+    name: str,
+    span_type: Optional[str] = None,
+    inputs: Optional[dict[str, Any]] = None,
+):
+    """Open an MLflow span for code that MLflow's autolog doesn't cover (TTS / ASR).
+
+    Yields the span (so callers can `set_outputs`) when MLflow tracing is active,
+    otherwise yields ``None`` and does nothing — so the audio paths never hard-
+    depend on MLflow being configured. Never raises into the caller.
+    """
+    if not _mlflow_tracing_enabled:
+        yield None
+        return
+    try:
+        import mlflow
+    except Exception:
+        yield None
+        return
+    with mlflow.start_span(name=name, span_type=span_type) as span:
+        if inputs:
+            try:
+                span.set_inputs(inputs)
+            except Exception:
+                pass
+        yield span
 
 
 def configure_pydantic_ai_instrumentation() -> None:
