@@ -501,7 +501,10 @@ class AgentManager:
                     builtin_tools=builtin_tools,
                     toolsets=mcp_servers
                 ) as stream_response:
-                    async for text in stream_response.stream_output(debounce_by=None):
+                    # Stream incremental deltas, not cumulative text: each
+                    # chunk's ``output`` is only the newly generated piece.
+                    # Consumers accumulate the chunks themselves.
+                    async for text in stream_response.stream_text(delta=True, debounce_by=None):
                         usage = stream_response.usage()
                         yield AgentResponse(
                             output=text,

@@ -71,8 +71,9 @@ async def transcription_websocket_endpoint(
         return
     
     try:
-        service = transcription_manager.create_service(init_request)
-        await service.connect()
+        # Connects the primary provider, or the configured fallback provider/model
+        # if the primary is unreachable (connect-time fallback for realtime ASR).
+        service = await transcription_manager.create_connected_service(init_request)
         await websocket.send_json(
             TranscriptionInitWsResponse(success=True, error=None).model_dump()
         )

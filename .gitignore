@@ -6,3 +6,6 @@ test.py
 .env
 chart/
 data/
+# Local MLflow runtime store (use the deployed tracking server instead)
+mlflow.db
+mlruns/

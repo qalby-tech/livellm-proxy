@@ -1,15 +1,16 @@
-from typing import Union, Tuple, Optional
+from typing import Union, Tuple, Optional, Type
 from audio_ai.base import AudioAIService
 from audio_ai.openai import OpenAIAudioAIService
 from audio_ai.elevenlabs import ElevenLabsAudioAIService
 
 # pydantic models
-from models.common import ProviderKind
+from models.common import ProviderKind, BaseRequest, FallbackStrategyType
 from models.audio.speak import SpeakRequest, SpeakResponse, SpeakStreamResponse
 from models.audio.transcribe import TranscribeRequest, TranscribeResponse
-from models.fallback import AudioFallbackRequest, TranscribeFallbackRequest
+from models.fallback import AudioFallbackRequest, TranscribeFallbackRequest, FallbackRequest, FallbackStrategy
 
 # managers
+from managers import telemetry as logfire
 from managers.config import ConfigManager, ProviderClient
 from managers.fallback import FallbackManager
 
@@ -19,7 +20,45 @@ class AudioManager:
         self.config_manager = config_manager
         self.fallback_manager = fallback_manager
 
-    
+    def _build_config_fallback(
+        self,
+        payload: BaseRequest,
+        fallback_cls: Type[FallbackRequest],
+    ) -> Optional[FallbackRequest]:
+        """
+        Build an automatic fallback request from the provider's model config.
+
+        Mirrors AgentManager._get_fallback_config for the audio endpoints: if the
+        primary provider/model has a `fallback` configured in its ModelConfig, wrap
+        the original request and a copy pointed at the fallback provider/model into a
+        FallbackRequest. Returns None when no fallback is configured.
+
+        Note: FallbackConfig.context_limit / context_overflow_strategy are intended
+        for chat context truncation and do not apply to audio requests (Speak/
+        Transcribe have no such fields), so they are intentionally ignored here.
+        """
+        model_config = self.config_manager.get_model_config(payload.provider_uid, payload.model)
+        if not (model_config and model_config.fallback):
+            return None
+
+        fb = model_config.fallback
+        fallback_request = payload.model_copy(update={
+            "provider_uid": fb.fallback_provider_uid,
+            "model": fb.fallback_model,
+        })
+
+        if fb.fallback_strategy == FallbackStrategyType.PARALLEL:
+            strategy = FallbackStrategy.PARALLEL
+        else:
+            strategy = FallbackStrategy.SEQUENTIAL
+
+        logfire.info(
+            f"Using automatic audio fallback from config: "
+            f"{payload.provider_uid}/{payload.model} -> "
+            f"{fb.fallback_provider_uid}/{fb.fallback_model} (strategy={strategy.value})"
+        )
+        return fallback_cls(requests=[payload, fallback_request], strategy=strategy)
+
     def create_service(
         self, 
         uid: str,
@@ -113,18 +152,26 @@ class AudioManager:
             If stream=False: SpeakResponse containing audio data, content type, and sample rate
             If stream=True: SpeakStreamResponse (tuple of AsyncIterator[bytes], mime_type, sample_rate)
         """
-        # If it's a simple request, run normally
+        # Simple request: build an automatic fallback from provider config if one
+        # is configured (the client-supplied AudioFallbackRequest below takes
+        # priority over config, matching the agent path).
         if isinstance(payload, SpeakRequest):
-            return await self.speak(payload, stream=stream)
-        
+            config_fallback = (
+                self._build_config_fallback(payload, AudioFallbackRequest)
+                if self.fallback_manager else None
+            )
+            if config_fallback is None:
+                return await self.speak(payload, stream=stream)
+            payload = config_fallback
+
         # If it's a fallback request, use the fallback manager
         if not self.fallback_manager:
             raise ValueError("FallbackManager not configured. Cannot use fallback requests.")
-        
+
         # Define the executor function for the fallback manager
         async def executor(request: SpeakRequest) -> Union[SpeakResponse, SpeakStreamResponse]:
             return await self.speak(request, stream=stream)
-        
+
         # Use the fallback manager's catch method
         return await self.fallback_manager.catch(payload, executor)
     
@@ -144,17 +191,24 @@ class AudioManager:
         Returns:
             TranscribeResponse containing transcribed text, detected language, and usage
         """
-        # If it's a simple request, run normally
+        # Simple request: build an automatic fallback from provider config if one
+        # is configured (a client-supplied TranscribeFallbackRequest takes priority).
         if isinstance(payload, TranscribeRequest):
-            return await self.transcribe(payload)
-        
+            config_fallback = (
+                self._build_config_fallback(payload, TranscribeFallbackRequest)
+                if self.fallback_manager else None
+            )
+            if config_fallback is None:
+                return await self.transcribe(payload)
+            payload = config_fallback
+
         # If it's a fallback request, use the fallback manager
         if not self.fallback_manager:
             raise ValueError("FallbackManager not configured. Cannot use fallback requests.")
-        
+
         # Define the executor function for the fallback manager
         async def executor(request: TranscribeRequest) -> TranscribeResponse:
             return await self.transcribe(request)
-        
+
         # Use the fallback manager's catch method
         return await self.fallback_manager.catch(payload, executor)

@@ -42,6 +42,22 @@ class EnvSettings(BaseSettings):
     otel_environment: Optional[str] = Field(
         None, description="deployment.environment.name (e.g. prod, staging)"
     )
+    mlflow_tracking_uri: Optional[str] = Field(
+        None,
+        description=(
+            "MLflow Tracking Server URI (e.g. http://localhost:5000 or "
+            "sqlite:///mlflow.db). When set, MLflow's native pydantic-ai "
+            "tracing integration is enabled and agent runs appear in the "
+            "MLflow Tracing UI."
+        ),
+    )
+    mlflow_experiment_name: Optional[str] = Field(
+        None,
+        description=(
+            "MLflow experiment name for traces (created if absent). Falls back "
+            "to MLflow's Default experiment when unset."
+        ),
+    )
     log_prompts: bool = Field(
         True, description="If true, prompt/completion text is recorded on spans"
     )
@@ -76,6 +92,13 @@ tel.configure_tracing(
     environment=env_settings.otel_environment,
 )
 tel.configure_pydantic_ai_instrumentation()
+
+# MLflow's native pydantic-ai tracing integration (independent pipeline).
+if env_settings.mlflow_tracking_uri:
+    tel.configure_mlflow_tracing(
+        tracking_uri=env_settings.mlflow_tracking_uri,
+        experiment_name=env_settings.mlflow_experiment_name,
+    )
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("uvicorn.access").addFilter(PingFilter())

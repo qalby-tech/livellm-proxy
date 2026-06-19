@@ -80,6 +80,40 @@ def configure_tracing(
     _tracer = trace.get_tracer("livellm-proxy")
 
 
+def configure_mlflow_tracing(
+    tracking_uri: str,
+    experiment_name: Optional[str] = None,
+) -> None:
+    """Enable MLflow's native pydantic-ai tracing integration.
+
+    Unlike the generic OTLP export in `configure_tracing()` (which targets a
+    collector/Tempo via the global TracerProvider), MLflow Tracing runs its own
+    OpenTelemetry pipeline and ships traces straight to the MLflow Tracking
+    Server. `mlflow.pydantic_ai.autolog()` monkey-patches pydantic-ai's
+    `Agent` / `InstrumentedModel` / tool / MCP calls and auto-sets
+    `instrument=True`, so every agent run is captured — prompts, model params,
+    tool runs, usage — and rendered in the MLflow Tracing UI with no per-call
+    wiring. The two pipelines are independent and compose freely.
+
+    `mlflow.set_experiment()` creates the experiment if it does not yet exist.
+    mlflow is imported lazily so it stays an optional runtime cost when unused.
+
+    Note: autolog records prompt/response content into MLflow regardless of the
+    `LOG_PROMPTS` gate (which only governs the OTLP/pydantic-ai spans).
+    """
+    import mlflow
+
+    mlflow.set_tracking_uri(tracking_uri)
+    if experiment_name:
+        mlflow.set_experiment(experiment_name)
+    mlflow.pydantic_ai.autolog()
+    info(
+        "MLflow pydantic-ai tracing enabled (tracking_uri=%s, experiment=%s)",
+        tracking_uri,
+        experiment_name or "<default>",
+    )
+
+
 def configure_pydantic_ai_instrumentation() -> None:
     """Turn on pydantic-ai's native OTel GenAI instrumentation.
 
