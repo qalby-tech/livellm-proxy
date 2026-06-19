@@ -101,12 +101,27 @@ def configure_mlflow_tracing(
     Note: autolog records prompt/response content into MLflow regardless of the
     `LOG_PROMPTS` gate (which only governs the OTLP/pydantic-ai spans).
     """
-    import mlflow
+    # Tracing must never be able to take down the proxy. `set_experiment()` is a
+    # synchronous call to the tracking server, so if MLflow is unreachable at
+    # startup it would raise here and crash the worker. Degrade gracefully: log
+    # and continue without tracing. (Per-request trace export is already async /
+    # best-effort via MLFLOW_ENABLE_ASYNC_TRACE_LOGGING, on by default.)
+    try:
+        import mlflow
 
-    mlflow.set_tracking_uri(tracking_uri)
-    if experiment_name:
-        mlflow.set_experiment(experiment_name)
-    mlflow.pydantic_ai.autolog()
+        mlflow.set_tracking_uri(tracking_uri)
+        if experiment_name:
+            mlflow.set_experiment(experiment_name)
+        mlflow.pydantic_ai.autolog()
+    except Exception as e:
+        warning(
+            "MLflow tracing setup failed (tracking_uri=%s); continuing without "
+            "it. Error: %s",
+            tracking_uri,
+            e,
+        )
+        return
+
     info(
         "MLflow pydantic-ai tracing enabled (tracking_uri=%s, experiment=%s)",
         tracking_uri,
