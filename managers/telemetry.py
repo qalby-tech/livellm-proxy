@@ -107,13 +107,20 @@ def configure_mlflow_tracing(
     # and continue without tracing. (Per-request trace export is already async /
     # best-effort via MLFLOW_ENABLE_ASYNC_TRACE_LOGGING, on by default.)
     try:
-        # `configure_tracing()` already installed the global OTel TracerProvider
-        # (OTLP/Tempo) that pydantic-ai emits spans to. By default MLflow uses an
-        # *isolated* provider and would never see those spans. Setting this to
-        # "false" makes MLflow attach its span processor to the existing global
-        # provider instead, so pydantic-ai spans are exported to MLflow too.
-        # setdefault: an explicit env override (e.g. from the chart) wins.
-        os.environ.setdefault("MLFLOW_USE_DEFAULT_TRACER_PROVIDER", "false")
+        # MLflow independently reads OTEL_EXPORTER_OTLP_ENDPOINT and tries to
+        # dual-export traces + metrics to the OTel collector through a gRPC OTLP
+        # exporter that isn't installed (and a payload OTLP rejects: span_type is
+        # None). That raises inside tracer-provider init and silently degrades
+        # EVERY MLflow span to a no-op — no traces are recorded, with no error.
+        # `configure_tracing()` has already captured the endpoint for the proxy's
+        # own exporter, so hide it from MLflow here and let MLflow keep its
+        # default *isolated* provider that ships only to its tracking server.
+        for _otlp_var in (
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        ):
+            os.environ.pop(_otlp_var, None)
 
         import mlflow
 
