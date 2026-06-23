@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional
 
@@ -171,13 +172,43 @@ def mlflow_span(
     except Exception:
         yield None
         return
-    with mlflow.start_span(name=name, span_type=span_type) as span:
+    # Open the span defensively. MLflow's span machinery touches the tracking
+    # server on close (export), and start_span itself can raise — neither must
+    # ever propagate into the audio path. On any failure we degrade to a no-op
+    # span (yield None); callers already guard with `if span is not None`.
+    cm = span = None
+    try:
+        cm = mlflow.start_span(name=name, span_type=span_type)
+        span = cm.__enter__()
         if inputs:
             try:
                 span.set_inputs(inputs)
             except Exception:
                 pass
+    except Exception as e:
+        debug("MLflow start_span failed; tracing this block as a no-op: %s", e)
+        if cm is not None:
+            try:
+                cm.__exit__(*sys.exc_info())
+            except Exception:
+                pass
+        yield None
+        return
+    try:
         yield span
+    except Exception:
+        # Record the error on the span, then re-raise so the caller's control
+        # flow is unchanged. Span-close errors are swallowed.
+        try:
+            cm.__exit__(*sys.exc_info())
+        except Exception:
+            pass
+        raise
+    else:
+        try:
+            cm.__exit__(None, None, None)
+        except Exception as e:
+            debug("MLflow span close failed (ignored): %s", e)
 
 
 def configure_pydantic_ai_instrumentation() -> None:
